@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"hash/fnv"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -235,35 +236,32 @@ func (tree *BKTree) Search(term string, threshold int) []string {
 	if d <= threshold {
 		results = append(results, tree.term)
 	}
-	for dist, child := range tree.children {
-		if d-dist <= threshold && d+dist >= threshold {
-			results = append(results, child.Search(term, threshold)...)
-		}
+	for _, child := range tree.children {
+		results = append(results, child.Search(term, threshold)...)
 	}
 	return results
 }
 
 func levenshtein(a, b string) int {
-	aLen := len(a)
-	bLen := len(b)
-	if aLen == 0 {
-		return bLen
+	al, bl := len(a), len(b)
+	if al == 0 {
+		return bl
 	}
-	if bLen == 0 {
-		return aLen
+	if bl == 0 {
+		return al
 	}
-	dp := make([][]int, aLen+1)
+	dp := make([][]int, al+1)
 	for i := range dp {
-		dp[i] = make([]int, bLen+1)
+		dp[i] = make([]int, bl+1)
 	}
-	for i := 0; i <= aLen; i++ {
+	for i := 0; i <= al; i++ {
 		dp[i][0] = i
 	}
-	for j := 0; j <= bLen; j++ {
+	for j := 0; j <= bl; j++ {
 		dp[0][j] = j
 	}
-	for i := 1; i <= aLen; i++ {
-		for j := 1; j <= bLen; j++ {
+	for i := 1; i <= al; i++ {
+		for j := 1; j <= bl; j++ {
 			cost := 0
 			if a[i-1] != b[j-1] {
 				cost = 1
@@ -271,7 +269,7 @@ func levenshtein(a, b string) int {
 			dp[i][j] = min(dp[i-1][j]+1, min(dp[i][j-1]+1, dp[i-1][j-1]+cost))
 		}
 	}
-	return dp[aLen][bLen]
+	return dp[al][bl]
 }
 
 func min(a, b int) int {
@@ -279,6 +277,43 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func tokenize(text string) []string {
+	return strings.Fields(strings.ToLower(text))
+}
+
+func extractTokens(record interface{}) []string {
+	var tokens []string
+	switch rec := record.(type) {
+	case string:
+		tokens = tokenize(rec)
+	case map[string]string:
+		for k, v := range rec {
+			tokens = append(tokens, tokenize(k)...)
+			tokens = append(tokens, tokenize(v)...)
+		}
+	case map[string]interface{}:
+		for k, v := range rec {
+			tokens = append(tokens, tokenize(k)...)
+			tokens = append(tokens, tokenize(fmt.Sprintf("%v", v))...)
+		}
+	default:
+		rv := reflect.ValueOf(record)
+		switch rv.Kind() {
+		case reflect.Struct:
+			for i := 0; i < rv.NumField(); i++ {
+				tokens = append(tokens, tokenize(fmt.Sprintf("%v", rv.Field(i).Interface()))...)
+			}
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < rv.Len(); i++ {
+				tokens = append(tokens, tokenize(fmt.Sprintf("%v", rv.Index(i).Interface()))...)
+			}
+		default:
+			tokens = tokenize(fmt.Sprintf("%v", record))
+		}
+	}
+	return tokens
 }
 
 type LookupEngine[K Ordered, V Record] struct {
@@ -297,33 +332,25 @@ func NewLookupEngine[K Ordered, V Record](treeOrder int, bfSize uint, bfHashes u
 	}
 }
 
-func tokenize(text string) []string {
-	words := strings.Fields(strings.ToLower(text))
-	return words
-}
-
 func (le *LookupEngine[K, V]) Insert(key K, value V) {
 	keyBytes := []byte(fmt.Sprintf("%v", key))
 	le.bf.Add(keyBytes)
 	le.tree.Insert(key, value)
-	vStr, ok := any(value).(string)
-	if ok {
-		words := tokenize(vStr)
-		for _, word := range words {
-			le.invertedIndex[word] = append(le.invertedIndex[word], key)
-			if le.bkTree == nil {
-				le.bkTree = NewBKTree(word)
-			} else {
-				exists := false
-				for _, candidate := range le.bkTree.Search(word, 0) {
-					if candidate == word {
-						exists = true
-						break
-					}
+	tokens := extractTokens(value)
+	for _, token := range tokens {
+		le.invertedIndex[token] = append(le.invertedIndex[token], key)
+		if le.bkTree == nil {
+			le.bkTree = NewBKTree(token)
+		} else {
+			exists := false
+			for _, candidate := range le.bkTree.Search(token, 0) {
+				if candidate == token {
+					exists = true
+					break
 				}
-				if !exists {
-					le.bkTree.Insert(word)
-				}
+			}
+			if !exists {
+				le.bkTree.Insert(token)
 			}
 		}
 	}
@@ -345,8 +372,8 @@ func (le *LookupEngine[K, V]) InOrderTraversal() []KeyValuePair[K, V] {
 func (le *LookupEngine[K, V]) KeywordSearch(query string) []KeyValuePair[K, V] {
 	var result []KeyValuePair[K, V]
 	word := strings.ToLower(query)
+	seen := make(map[K]struct{})
 	if keys, ok := le.invertedIndex[word]; ok {
-		seen := make(map[K]struct{})
 		for _, k := range keys {
 			if _, found := seen[k]; !found {
 				if v, ok := le.tree.Search(k); ok {
@@ -365,14 +392,14 @@ func (le *LookupEngine[K, V]) FuzzySearch(query string, threshold int) []KeyValu
 		return result
 	}
 	matches := le.bkTree.Search(strings.ToLower(query), threshold)
-	seenKeys := make(map[K]struct{})
+	seen := make(map[K]struct{})
 	for _, word := range matches {
 		if keys, ok := le.invertedIndex[word]; ok {
 			for _, k := range keys {
-				if _, found := seenKeys[k]; !found {
+				if _, found := seen[k]; !found {
 					if v, ok := le.tree.Search(k); ok {
 						result = append(result, KeyValuePair[K, V]{k, v})
-						seenKeys[k] = struct{}{}
+						seen[k] = struct{}{}
 					}
 				}
 			}
@@ -381,33 +408,70 @@ func (le *LookupEngine[K, V]) FuzzySearch(query string, threshold int) []KeyValu
 	return result
 }
 
+type Person struct {
+	Name       string
+	Occupation string
+	Email      string
+}
+
 func main() {
-	lookup := NewLookupEngine[int, string](3, 1024, 3)
-	keys := []int{10, 20, 5, 6, 12, 30, 7, 17}
-	for _, k := range keys {
-		lookup.Insert(k, "Value for "+strconv.Itoa(k))
+	leStr := NewLookupEngine[int, string](3, 1024, 3)
+	keysStr := []int{10, 20, 5, 6, 12, 30, 7, 17}
+	for _, k := range keysStr {
+		leStr.Insert(k, "Autocomplete record "+strconv.Itoa(k))
 	}
-	searchKeys := []int{6, 15, 17}
-	for _, sk := range searchKeys {
-		if value, found := lookup.Search(sk); found {
-			fmt.Printf("Found key %d with value: %s\n", sk, value)
-		} else {
-			fmt.Printf("Key %d not found.\n", sk)
-		}
+	fmt.Println("String Records:")
+	for _, rec := range leStr.InOrderTraversal() {
+		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
 	}
-	fmt.Println("Keyword Search for 'value':")
-	kwResults := lookup.KeywordSearch("value")
-	for _, record := range kwResults {
-		fmt.Printf("Key: %v, Value: %v\n", record.Key, record.Value)
+	fmt.Println("Keyword Search for 'autocomplete':")
+	for _, rec := range leStr.KeywordSearch("autocomplete") {
+		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
 	}
-	fmt.Println("Fuzzy Search for 'valeu' with threshold 2:")
-	fzResults := lookup.FuzzySearch("valeu", 2)
-	for _, record := range fzResults {
-		fmt.Printf("Key: %v, Value: %v\n", record.Key, record.Value)
+	fmt.Println("Fuzzy Search for 'autocomplet' (threshold 1):")
+	for _, rec := range leStr.FuzzySearch("autocomplet", 1) {
+		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
 	}
-	fmt.Println("In-Order Traversal:")
-	records := lookup.InOrderTraversal()
-	for _, record := range records {
-		fmt.Printf("Key: %v, Value: %v\n", record.Key, record.Value)
+
+	leMap := NewLookupEngine[int, map[string]string](3, 1024, 3)
+	keysMap := []int{101, 102, 103}
+	recMap1 := map[string]string{"title": "Map Record One", "desc": "This is the first map record"}
+	recMap2 := map[string]string{"title": "Map Record Two", "desc": "Second record in a map"}
+	recMap3 := map[string]string{"title": "Another Map", "desc": "Map record three"}
+	leMap.Insert(keysMap[0], recMap1)
+	leMap.Insert(keysMap[1], recMap2)
+	leMap.Insert(keysMap[2], recMap3)
+	fmt.Println("\nMap Records:")
+	for _, rec := range leMap.InOrderTraversal() {
+		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
+	}
+	fmt.Println("Keyword Search for 'record':")
+	for _, rec := range leMap.KeywordSearch("record") {
+		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
+	}
+	fmt.Println("Fuzzy Search for 'map' (threshold 0):")
+	for _, rec := range leMap.FuzzySearch("map", 0) {
+		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
+	}
+
+	leStruct := NewLookupEngine[int, Person](3, 1024, 3)
+	keysStruct := []int{201, 202, 203}
+	recStruct1 := Person{Name: "Alice", Occupation: "Engineer", Email: "alice@example.com"}
+	recStruct2 := Person{Name: "Bob", Occupation: "Artist", Email: "bob@example.com"}
+	recStruct3 := Person{Name: "Charlie", Occupation: "Doctor", Email: "charlie@example.com"}
+	leStruct.Insert(keysStruct[0], recStruct1)
+	leStruct.Insert(keysStruct[1], recStruct2)
+	leStruct.Insert(keysStruct[2], recStruct3)
+	fmt.Println("\nStruct Records:")
+	for _, rec := range leStruct.InOrderTraversal() {
+		fmt.Printf("Key: %v, Value: %+v\n", rec.Key, rec.Value)
+	}
+	fmt.Println("Keyword Search for 'doctor':")
+	for _, rec := range leStruct.KeywordSearch("doctor") {
+		fmt.Printf("Key: %v, Value: %+v\n", rec.Key, rec.Value)
+	}
+	fmt.Println("Fuzzy Search for 'Alic' (threshold 1):")
+	for _, rec := range leStruct.FuzzySearch("Alic", 1) {
+		fmt.Printf("Key: %v, Value: %+v\n", rec.Key, rec.Value)
 	}
 }
