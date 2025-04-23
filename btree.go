@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 )
 
@@ -531,6 +532,13 @@ type LookupEngine[K Ordered, V Record] struct {
 	bkTree        *BKTree
 	tokens        map[string]struct{}
 	mu            sync.RWMutex
+
+	// New fields for WAL, TTL, and API metrics
+	walPath string
+	walMu   sync.Mutex
+	walFile *os.File
+	ttl     map[K]time.Time
+	metrics map[string]int
 }
 
 func NewLookupEngine[K Ordered, V Record](order int, bfSize, bfHashes uint) *LookupEngine[K, V] {
@@ -542,12 +550,54 @@ func NewLookupEngine[K Ordered, V Record](order int, bfSize, bfHashes uint) *Loo
 	}
 }
 
-func (le *LookupEngine[K, V]) Insert(key K, value V) {
-	keyBytes := []byte(fmt.Sprintf("%v", key))
+// New method to set the WAL file.
+func (le *LookupEngine[K, V]) SetWAL(path string) error {
+	le.walMu.Lock()
+	defer le.walMu.Unlock()
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	le.walPath = path
+	le.walFile = file
+	return nil
+}
+
+// Define a WAL record structure.
+type walRecord[K Ordered, V Record] struct {
+	Op        string    `json:"op"`
+	Timestamp time.Time `json:"ts"`
+	Key       K         `json:"key"`
+	Value     V         `json:"value,omitempty"`
+	TTL       int64     `json:"ttl,omitempty"`
+}
+
+// Helper to append a record to the WAL.
+func (le *LookupEngine[K, V]) appendWAL(rec walRecord[K, V]) {
+	le.walMu.Lock()
+	defer le.walMu.Unlock()
+	if le.walFile == nil {
+		return
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return
+	}
+	le.walFile.Write(append(data, '\n'))
+}
+
+// New UpsertWithTTL: upsert record with a TTL in seconds.
+func (le *LookupEngine[K, V]) UpsertWithTTL(key K, value V, ttlSeconds int) {
 	le.mu.Lock()
 	defer le.mu.Unlock()
-	le.bf.Add(keyBytes)
+	if le.ttl == nil {
+		le.ttl = make(map[K]time.Time)
+	}
+	// Set expiry time.
+	le.ttl[key] = time.Now().Add(time.Duration(ttlSeconds) * time.Second)
 	le.tree.Insert(key, value)
+	keyBytes := []byte(fmt.Sprintf("%v", key))
+	le.bf.Add(keyBytes)
 	tokens := extractTokens(value)
 	for _, token := range tokens {
 		le.invertedIndex[token] = append(le.invertedIndex[token], key)
@@ -560,12 +610,59 @@ func (le *LookupEngine[K, V]) Insert(key K, value V) {
 			le.tokens[token] = struct{}{}
 		}
 	}
+	if le.metrics == nil {
+		le.metrics = make(map[string]int)
+	}
+	le.metrics["upserts"]++
+	rec := walRecord[K, V]{
+		Op:        "upsert",
+		Timestamp: time.Now(),
+		Key:       key,
+		Value:     value,
+		TTL:       int64(ttlSeconds),
+	}
+	le.appendWAL(rec)
+}
+
+func (le *LookupEngine[K, V]) Insert(key K, value V) {
+	le.mu.Lock()
+	defer le.mu.Unlock()
+	le.tree.Insert(key, value)
+	keyBytes := []byte(fmt.Sprintf("%v", key))
+	le.bf.Add(keyBytes)
+	tokens := extractTokens(value)
+	for _, token := range tokens {
+		le.invertedIndex[token] = append(le.invertedIndex[token], key)
+		if _, exists := le.tokens[token]; !exists {
+			if le.bkTree == nil {
+				le.bkTree = NewBKTree(token)
+			} else {
+				le.bkTree.Insert(token)
+			}
+			le.tokens[token] = struct{}{}
+		}
+	}
+	if le.metrics == nil {
+		le.metrics = make(map[string]int)
+	}
+	le.metrics["inserts"]++
+	rec := walRecord[K, V]{
+		Op:        "insert",
+		Timestamp: time.Now(),
+		Key:       key,
+		Value:     value,
+	}
+	le.appendWAL(rec)
 }
 
 func (le *LookupEngine[K, V]) Search(key K) (V, bool) {
-	keyBytes := []byte(fmt.Sprintf("%v", key))
 	le.mu.RLock()
 	defer le.mu.RUnlock()
+	if exp, ok := le.ttl[key]; ok && time.Now().After(exp) {
+		var zero V
+		return zero, false
+	}
+	keyBytes := []byte(fmt.Sprintf("%v", key))
 	if !le.bf.Test(keyBytes) {
 		var zero V
 		return zero, false
@@ -623,21 +720,47 @@ func (le *LookupEngine[K, V]) FuzzySearch(query string, threshold int) []KeyValu
 }
 
 type Query struct {
-	Keywords []string
-	Fuzzy    map[string]int
-	Page     int
-	Size     int
-	Sort     string
+	Keywords []string       `json:"keywords"`
+	Fuzzy    map[string]int `json:"fuzzy"`
+	Page     int            `json:"page"`
+	Size     int            `json:"size"`
+	Sort     string         `json:"sort"`
+}
+
+func (le *LookupEngine[K, V]) Delete(key K) bool {
+	le.mu.Lock()
+	defer le.mu.Unlock()
+	deleted := le.tree.Delete(key)
+	if deleted {
+		keyBytes := []byte(fmt.Sprintf("%v", key))
+		le.bf.Remove(keyBytes)
+		delete(le.ttl, key)
+		if le.metrics == nil {
+			le.metrics = make(map[string]int)
+		}
+		le.metrics["deletes"]++
+		rec := walRecord[K, V]{
+			Op:        "delete",
+			Timestamp: time.Now(),
+			Key:       key,
+		}
+		le.appendWAL(rec)
+	}
+	return deleted
 }
 
 func (le *LookupEngine[K, V]) Query(q Query) []KeyValuePair[K, V] {
 	le.mu.RLock()
 	defer le.mu.RUnlock()
 	resultSet := make(map[K]KeyValuePair[K, V])
+	now := time.Now()
 	for _, kw := range q.Keywords {
 		word := strings.ToLower(kw)
 		if keys, exists := le.invertedIndex[word]; exists {
 			for _, k := range keys {
+				if exp, ok := le.ttl[k]; ok && now.After(exp) {
+					continue
+				}
 				if v, ok := le.tree.Search(k); ok {
 					resultSet[k] = KeyValuePair[K, V]{k, v}
 				}
@@ -647,6 +770,9 @@ func (le *LookupEngine[K, V]) Query(q Query) []KeyValuePair[K, V] {
 	for term, thr := range q.Fuzzy {
 		fuzzyResults := le.FuzzySearch(strings.ToLower(term), thr)
 		for _, pair := range fuzzyResults {
+			if exp, ok := le.ttl[pair.Key]; ok && now.After(exp) {
+				continue
+			}
 			resultSet[pair.Key] = pair
 		}
 	}
@@ -673,6 +799,10 @@ func (le *LookupEngine[K, V]) Query(q Query) []KeyValuePair[K, V] {
 		}
 		results = results[start:end]
 	}
+	if le.metrics == nil {
+		le.metrics = make(map[string]int)
+	}
+	le.metrics["queries"]++
 	return results
 }
 
