@@ -1,4 +1,4 @@
-package main
+package lookup
 
 import (
 	"encoding/json"
@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"runtime" // added
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -842,9 +841,6 @@ type KeyValueQuery struct {
 	Exact bool   `json:"exact"`
 }
 
-// MultiQuery processes different query types.
-// Supports TermQuery (keyword search), BooleanQuery (conditional search),
-// and KeyValueQuery (field filter); others can be added similarly.
 func (le *LookupEngine[K, V]) MultiQuery(q any) []KeyValuePair[K, V] {
 	resultSet := make(map[K]KeyValuePair[K, V])
 	all := le.tree.InOrderTraversal()
@@ -853,7 +849,6 @@ func (le *LookupEngine[K, V]) MultiQuery(q any) []KeyValuePair[K, V] {
 	case TermQuery:
 		return le.KeywordSearch(query.Term)
 	case BooleanQuery:
-		// Process MUST queries (intersection)
 		var mustResults []map[K]KeyValuePair[K, V]
 		for _, sub := range query.Must {
 			subRes := le.MultiQuery(sub)
@@ -864,7 +859,6 @@ func (le *LookupEngine[K, V]) MultiQuery(q any) []KeyValuePair[K, V] {
 			mustResults = append(mustResults, resMap)
 		}
 		if len(mustResults) > 0 {
-			// Intersect all MUST results.
 			for k, pair := range mustResults[0] {
 				include := true
 				for i := 1; i < len(mustResults); i++ {
@@ -878,19 +872,16 @@ func (le *LookupEngine[K, V]) MultiQuery(q any) []KeyValuePair[K, V] {
 				}
 			}
 		} else {
-			// If no MUST clause, start with all records.
 			for _, pair := range all {
 				resultSet[pair.Key] = pair
 			}
 		}
-		// Process MUST_NOT queries (exclusion)
 		for _, sub := range query.MustNot {
 			subRes := le.MultiQuery(sub)
 			for _, pair := range subRes {
 				delete(resultSet, pair.Key)
 			}
 		}
-		// Process SHOULD queries (union)
 		if len(query.Should) > 0 {
 			shouldSet := make(map[K]KeyValuePair[K, V])
 			for _, sub := range query.Should {
@@ -899,7 +890,6 @@ func (le *LookupEngine[K, V]) MultiQuery(q any) []KeyValuePair[K, V] {
 					shouldSet[pair.Key] = pair
 				}
 			}
-			// Merge union if resultSet is not already empty.
 			if len(resultSet) == 0 {
 				resultSet = shouldSet
 			} else {
@@ -909,13 +899,11 @@ func (le *LookupEngine[K, V]) MultiQuery(q any) []KeyValuePair[K, V] {
 			}
 		}
 	case KeyValueQuery:
-		// Scan all records and filter by the record's field value.
 		for _, pair := range all {
 			var fieldVal string
 			rVal := reflect.ValueOf(pair.Value)
 			switch rVal.Kind() {
 			case reflect.Map:
-				// assumes map with string keys
 				val := rVal.MapIndex(reflect.ValueOf(query.Field))
 				if val.IsValid() {
 					fieldVal = fmt.Sprintf("%v", val.Interface())
@@ -926,7 +914,6 @@ func (le *LookupEngine[K, V]) MultiQuery(q any) []KeyValuePair[K, V] {
 					fieldVal = fmt.Sprintf("%v", f.Interface())
 				}
 			default:
-				// unsupported type, skip filtering.
 				continue
 			}
 			if query.Exact {
@@ -1119,175 +1106,44 @@ func (le *LookupEngine[K, V]) BulkInsert(pairs []KeyValuePair[K, V]) {
 			for i := s; i < e; i++ {
 				pair := pairs[i]
 				last[pair.Key] = now
-				// Bloom filter increments
 				keyBytes := []byte(fmt.Sprintf("%v", pair.Key))
 				h1, h2 := hashDouble(keyBytes)
 				for j := uint(0); j < bfK; j++ {
 					bloom[(h1+j*h2)%bfM]++
 				}
-				// Token extraction specialized for map[string]any
 				for token, _ := range any(pair.Value).(map[string]any) {
-					// index field name and value
 					inv[token] = append(inv[token], pair.Key)
-					// skip building a BK-tree here
 				}
 			}
 			results[idx] = workerResult{invIdx: inv, bloomIncr: bloom, lastAccess: last}
 		}(w, start, end)
 	}
 	wg.Wait()
-	// Merge results serially
 	for _, res := range results {
-		// last access
 		for k, t := range res.lastAccess {
 			newLastAccess[k] = t
 		}
-		// bloom
 		for i, c := range res.bloomIncr {
 			newCounts[i] += c
 		}
-		// inverted index
 		for token, keys := range res.invIdx {
 			slice := newInvIdx[token]
 			slice = append(slice, keys...)
 			newInvIdx[token] = slice
 		}
 	}
-	// Swap in new structures
 	le.mu.Lock()
 	defer le.mu.Unlock()
 	le.tree = newTree
 	le.bf.counts = newCounts
 	le.invertedIndex = newInvIdx
 	le.lastAccess = newLastAccess
-	// Rebuild BK-tree once
 	le.bkTree = NewBKTree("")
 	for token := range newInvIdx {
 		le.bkTree.Insert(token)
 	}
-	// Update tokens set
 	le.tokens = make(map[string]struct{}, len(newInvIdx))
 	for token := range newInvIdx {
 		le.tokens[token] = struct{}{}
 	}
-}
-
-type Person struct {
-	Name       string
-	Occupation string
-	Email      string
-}
-
-func main() {
-	leStr := NewLookupEngine[int, string](3, 1024, 3)
-	leStr.StartBackgroundCleaner(1*time.Minute, 5*time.Minute)
-	for _, k := range []int{10, 20, 5, 6, 12, 30, 7, 17} {
-		leStr.Insert(k, "Autocomplete record "+strconv.Itoa(k))
-	}
-	fmt.Println("String Records:")
-	for _, r := range leStr.InOrderTraversal() {
-		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
-	}
-	fmt.Println("Keyword Search for 'autocomplete':")
-	for _, r := range leStr.KeywordSearch("autocomplete") {
-		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
-	}
-	fmt.Println("Fuzzy Search for 'autocomplet' (threshold 1):")
-	for _, r := range leStr.FuzzySearch("autocomplet", 1) {
-		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
-	}
-	q := Query{Keywords: []string{"autocomplete"}, Fuzzy: map[string]int{"autocomplet": 1}, Page: 1, Size: 10, Sort: "asc"}
-	fmt.Println("Combined Query Search:")
-	for _, r := range leStr.Query(q) {
-		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
-	}
-	leMap := NewLookupEngine[int, map[string]string](3, 1024, 3)
-	leMap.Insert(101, map[string]string{"title": "Map Record One", "desc": "This is the first map record"})
-	leMap.Insert(102, map[string]string{"title": "Map Record Two", "desc": "Second record in a map"})
-	leMap.Insert(103, map[string]string{"title": "Another Map", "desc": "Map record three"})
-	fmt.Println("\nMap Records:")
-	for _, r := range leMap.InOrderTraversal() {
-		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
-	}
-	fmt.Println("Keyword Search for 'record':")
-	for _, r := range leMap.KeywordSearch("record") {
-		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
-	}
-	fmt.Println("Fuzzy Search for 'map' (threshold 0):")
-	for _, r := range leMap.FuzzySearch("map", 0) {
-		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
-	}
-	leStruct := NewLookupEngine[int, Person](3, 1024, 3)
-	leStruct.Insert(201, Person{"Alice", "Engineer", "alice@example.com"})
-	leStruct.Insert(202, Person{"Bob", "Artist", "bob@example.com"})
-	leStruct.Insert(203, Person{"Charlie", "Doctor", "charlie@example.com"})
-	fmt.Println("\nStruct Records:")
-	for _, r := range leStruct.InOrderTraversal() {
-		fmt.Printf("Key: %v, Value: %+v\n", r.Key, r.Value)
-	}
-	fmt.Println("Keyword Search for 'doctor':")
-	for _, r := range leStruct.KeywordSearch("doctor") {
-		fmt.Printf("Key: %v, Value: %+v\n", r.Key, r.Value)
-	}
-	fmt.Println("Fuzzy Search for 'Alic' (threshold 1):")
-	for _, r := range leStruct.FuzzySearch("Alic", 1) {
-		fmt.Printf("Key: %v, Value: %+v\n", r.Key, r.Value)
-	}
-
-	// New block: generate 1 million []map[string]any records and apply searches/lookup.
-	leAny := NewLookupEngine[int, map[string]any](3, 1024, 3)
-	const recordsCount = 1000000
-	var pairs []KeyValuePair[int, map[string]any]
-	for i := 1; i <= recordsCount; i++ {
-		rec := map[string]any{
-			"Field1":  fmt.Sprintf("Record %d", i),
-			"Field2":  fmt.Sprintf("Data %d", i),
-			"Field3":  fmt.Sprintf("Value %d", i),
-			"Field4":  fmt.Sprintf("Info %d", i),
-			"Field5":  fmt.Sprintf("Detail %d", i),
-			"Field6":  fmt.Sprintf("Note %d", i),
-			"Field7":  fmt.Sprintf("Extra %d", i),
-			"Field8":  fmt.Sprintf("Meta %d", i),
-			"Field9":  fmt.Sprintf("Param %d", i),
-			"Field10": fmt.Sprintf("Item %d", i),
-		}
-		pairs = append(pairs, KeyValuePair[int, map[string]any]{Key: i, Value: rec})
-	}
-	start := time.Now()
-	leAny.BulkInsert(pairs)
-	fmt.Printf("Inserted %d records in %v\n", recordsCount, time.Since(start))
-	fmt.Println("\nMap[string]any Records Keyword Search for 'record':")
-	results := leAny.KeywordSearch("record")
-	fmt.Printf("Found %d records matching 'record'\n", len(results))
-
-	fmt.Println("Fuzzy Search for 'Recor' (threshold 1):")
-	results = leAny.FuzzySearch("Recor", 1)
-	fmt.Printf("Found %d records matching fuzzy 'Recor'\n", len(results))
-
-	// === New Examples for MultiQuery ===
-	termQuery := TermQuery{Term: "autocomplete"}
-	fmt.Println("\nMultiQuery Example - TermQuery for 'autocomplete':")
-	for _, r := range leStr.MultiQuery(termQuery) {
-		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
-	}
-
-	boolQuery := BooleanQuery{
-		Must:    []any{TermQuery{Term: "map"}},
-		MustNot: []any{TermQuery{Term: "first"}},
-		Should:  []any{KeyValueQuery{Field: "title", Value: "Record"}},
-	}
-	start = time.Now()
-	fmt.Println("\nMultiQuery Example - BooleanQuery:")
-	for _, r := range leMap.MultiQuery(boolQuery) {
-		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
-	}
-	fmt.Printf("BooleanQuery took %v\n", time.Since(start))
-	kvQuery := KeyValueQuery{Field: "Occupation", Value: "Engineer"}
-
-	start = time.Now()
-	fmt.Println("\nMultiQuery Example - KeyValueQuery:")
-	for _, r := range leStruct.MultiQuery(kvQuery) {
-		fmt.Printf("Key: %v, Value: %+v\n", r.Key, r.Value)
-	}
-	fmt.Printf("KeyValueQuery took %v\n", time.Since(start))
 }
