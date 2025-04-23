@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"os"
 	"reflect"
 	"sort"
 	"strconv"
@@ -24,6 +26,7 @@ type BPlusTree[K Ordered, V Record] struct {
 }
 
 type bTreeNode[K Ordered, V Record] struct {
+	mu       sync.RWMutex // new per-node lock
 	keys     []K
 	children []*bTreeNode[K, V]
 	values   []V
@@ -69,6 +72,12 @@ func (tree *BPlusTree[K, V]) Insert(key K, value V) {
 func (tree *BPlusTree[K, V]) insertNonFull(node *bTreeNode[K, V], key K, value V) {
 	if node.leaf {
 		idx := sort.Search(len(node.keys), func(i int) bool { return node.keys[i] >= key })
+		// if key exists, update value
+		if idx < len(node.keys) && node.keys[idx] == key {
+			node.values[idx] = value
+			return
+		}
+		// now insert new key/value in one splice operation
 		node.keys = append(node.keys, key)
 		node.values = append(node.values, value)
 		copy(node.keys[idx+1:], node.keys[idx:])
@@ -151,21 +160,152 @@ func (tree *BPlusTree[K, V]) InOrderTraversal() []KeyValuePair[K, V] {
 	return result
 }
 
+func (tree *BPlusTree[K, V]) Delete(key K) bool {
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	deleted := tree.deleteInternal(tree.root, key)
+	// if root is nonleaf with only one child, make that child the new root
+	if !tree.root.leaf && len(tree.root.children) == 1 {
+		tree.root = tree.root.children[0]
+	}
+	return deleted
+}
+
+func (tree *BPlusTree[K, V]) deleteInternal(node *bTreeNode[K, V], key K) bool {
+	if node.leaf {
+		idx := sort.Search(len(node.keys), func(i int) bool { return node.keys[i] >= key })
+		if idx < len(node.keys) && node.keys[idx] == key {
+			// Remove the key and its value.
+			node.keys = append(node.keys[:idx], node.keys[idx+1:]...)
+			node.values = append(node.values[:idx], node.values[idx+1:]...)
+			return true
+		}
+		return false
+	}
+	// internal node deletion
+	idx := sort.Search(len(node.keys), func(i int) bool { return key < node.keys[i] })
+	deleted := tree.deleteInternal(node.children[idx], key)
+	if !deleted {
+		return false
+	}
+	// Underflow handling: if child is under minimum keys, try redistribution/merge.
+	minKeys := (tree.order - 1) / 2
+	if len(node.children[idx].keys) < minKeys {
+		// Try to borrow from left sibling.
+		if idx > 0 && len(node.children[idx-1].keys) > minKeys {
+			child := node.children[idx]
+			left := node.children[idx-1]
+			child.keys = append([]K{node.keys[idx-1]}, child.keys...)
+			child.values = append([]V{left.values[len(left.values)-1]}, child.values...)
+			node.keys[idx-1] = left.keys[len(left.keys)-1]
+			left.keys = left.keys[:len(left.keys)-1]
+			left.values = left.values[:len(left.values)-1]
+		} else if idx < len(node.children)-1 && len(node.children[idx+1].keys) > minKeys {
+			// or borrow from right sibling.
+			child := node.children[idx]
+			right := node.children[idx+1]
+			child.keys = append(child.keys, node.keys[idx])
+			child.values = append(child.values, right.values[0])
+			node.keys[idx] = right.keys[0]
+			right.keys = right.keys[1:]
+			right.values = right.values[1:]
+		} else {
+			// Otherwise merge with a sibling.
+			if idx > 0 {
+				left := node.children[idx-1]
+				child := node.children[idx]
+				left.keys = append(left.keys, node.keys[idx-1])
+				left.keys = append(left.keys, child.keys...)
+				left.values = append(left.values, child.values...)
+				node.keys = append(node.keys[:idx-1], node.keys[idx:]...)
+				node.children = append(node.children[:idx], node.children[idx+1:]...)
+			} else {
+				child := node.children[idx]
+				right := node.children[idx+1]
+				child.keys = append(child.keys, node.keys[idx])
+				child.keys = append(child.keys, right.keys...)
+				child.values = append(child.values, right.values...)
+				node.keys = append(node.keys[:idx], node.keys[idx+1:]...)
+				node.children = append(node.children[:idx+1], node.children[idx+2:]...)
+			}
+		}
+	}
+	return true
+}
+
+func (tree *BPlusTree[K, V]) LowerBound(key K) []KeyValuePair[K, V] {
+	tree.mu.RLock()
+	defer tree.mu.RUnlock()
+	var result []KeyValuePair[K, V]
+	// traverse to appropriate leaf
+	node := tree.root
+	for !node.leaf {
+		idx := sort.Search(len(node.keys), func(i int) bool { return key < node.keys[i] })
+		node = node.children[idx]
+	}
+	idx := sort.Search(len(node.keys), func(i int) bool { return node.keys[i] >= key })
+	for ; node != nil; node = node.next {
+		for i := idx; i < len(node.keys); i++ {
+			result = append(result, KeyValuePair[K, V]{node.keys[i], node.values[i]})
+		}
+		idx = 0
+	}
+	return result
+}
+
+func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlusTree[K, V] {
+	tree := &BPlusTree[K, V]{order: order}
+	// Build leaf nodes.
+	var leaves []*bTreeNode[K, V]
+	var leaf *bTreeNode[K, V] = newNode[K, V](order, true)
+	for _, pair := range pairs {
+		if len(leaf.keys) == order-1 {
+			leaves = append(leaves, leaf)
+			leaf = newNode[K, V](order, true)
+		}
+		leaf.keys = append(leaf.keys, pair.Key)
+		leaf.values = append(leaf.values, pair.Value)
+	}
+	leaves = append(leaves, leaf)
+	// Link leaves.
+	for i := 0; i < len(leaves)-1; i++ {
+		leaves[i].next = leaves[i+1]
+	}
+	// Build internal layers.
+	nodes := leaves
+	for len(nodes) > 1 {
+		var parents []*bTreeNode[K, V]
+		var parent *bTreeNode[K, V] = newNode[K, V](order, false)
+		for _, node := range nodes {
+			if len(parent.children) == order {
+				parents = append(parents, parent)
+				parent = newNode[K, V](order, false)
+			}
+			parent.children = append(parent.children, node)
+			parent.keys = append(parent.keys, node.keys[0])
+		}
+		parents = append(parents, parent)
+		nodes = parents
+	}
+	tree.root = nodes[0]
+	return tree
+}
+
 type KeyValuePair[K Ordered, V Record] struct {
 	Key   K
 	Value V
 }
 
 type BloomFilter struct {
-	bitset []uint64
+	counts []uint8 // was bitset []uint64; now one counter per bit
 	m      uint
 	k      uint
 }
 
 func NewBloomFilter(m, k uint) *BloomFilter {
-	size := (m + 63) / 64
+	// allocate one counter per bit (m counters)
 	return &BloomFilter{
-		bitset: make([]uint64, size),
+		counts: make([]uint8, m),
 		m:      m,
 		k:      k,
 	}
@@ -174,16 +314,26 @@ func NewBloomFilter(m, k uint) *BloomFilter {
 func (bf *BloomFilter) Add(data []byte) {
 	h1, h2 := hashDouble(data)
 	for i := uint(0); i < bf.k; i++ {
-		combined := (h1 + i*h2) % bf.m
-		bf.setBit(combined)
+		idx := (h1 + i*h2) % bf.m
+		bf.counts[idx]++
+	}
+}
+
+func (bf *BloomFilter) Remove(data []byte) {
+	h1, h2 := hashDouble(data)
+	for i := uint(0); i < bf.k; i++ {
+		idx := (h1 + i*h2) % bf.m
+		if bf.counts[idx] > 0 {
+			bf.counts[idx]--
+		}
 	}
 }
 
 func (bf *BloomFilter) Test(data []byte) bool {
 	h1, h2 := hashDouble(data)
 	for i := uint(0); i < bf.k; i++ {
-		combined := (h1 + i*h2) % bf.m
-		if !bf.getBit(combined) {
+		idx := (h1 + i*h2) % bf.m
+		if bf.counts[idx] == 0 {
 			return false
 		}
 	}
@@ -196,18 +346,6 @@ func hashDouble(data []byte) (uint, uint) {
 	h2 := fnv.New64()
 	h2.Write(data)
 	return uint(h1.Sum64()), uint(h2.Sum64())
-}
-
-func (bf *BloomFilter) setBit(i uint) {
-	idx := i / 64
-	pos := i % 64
-	bf.bitset[idx] |= 1 << pos
-}
-
-func (bf *BloomFilter) getBit(i uint) bool {
-	idx := i / 64
-	pos := i % 64
-	return (bf.bitset[idx] & (1 << pos)) != 0
 }
 
 type BKTree struct {
@@ -258,6 +396,38 @@ func (tree *BKTree) Search(term string, threshold int) []string {
 		}
 	}
 	return results
+}
+
+func (tree *BKTree) Delete(term string) bool {
+	term = strings.ToLower(term)
+	// if current node matches and has children then promote one child.
+	if tree.term == term {
+		if len(tree.children) == 0 {
+			// cannot delete the only node
+			return false
+		}
+		for d, child := range tree.children {
+			tree.term = child.term
+			// merge grandchildren into current node.
+			for cd, gc := range child.children {
+				tree.children[cd] = gc
+			}
+			delete(tree.children, d)
+			return true
+		}
+	} else {
+		// find the child branch matching the distance.
+		d := levenshtein(tree.term, term)
+		if child, ok := tree.children[d]; ok {
+			deleted := child.Delete(term)
+			// if deletion made the child empty, remove it.
+			if deleted && len(child.children) == 0 && child.term == term {
+				delete(tree.children, d)
+			}
+			return deleted
+		}
+	}
+	return false
 }
 
 func levenshtein(a, b string) int {
@@ -504,6 +674,64 @@ func (le *LookupEngine[K, V]) Query(q Query) []KeyValuePair[K, V] {
 		results = results[start:end]
 	}
 	return results
+}
+
+// Add snapshot payload struct for persistence.
+type SnapshotPayload[K Ordered, V Record] struct {
+	Records       []KeyValuePair[K, V] `json:"records"`
+	InvertedIndex map[string][]K       `json:"inverted_index"`
+	BloomCounts   []uint8              `json:"bloom_counts"`
+	BloomM        uint                 `json:"bloom_m"`
+	BloomK        uint                 `json:"bloom_k"`
+}
+
+// Replace SaveSnapshot implementation.
+func (le *LookupEngine[K, V]) SaveSnapshot(path string) error {
+	le.mu.RLock()
+	defer le.mu.RUnlock()
+	payload := SnapshotPayload[K, V]{
+		Records:       le.tree.InOrderTraversal(),
+		InvertedIndex: le.invertedIndex,
+		BloomCounts:   le.bf.counts,
+		BloomM:        le.bf.m,
+		BloomK:        le.bf.k,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// Replace LoadSnapshot implementation.
+func (le *LookupEngine[K, V]) LoadSnapshot(path string) error {
+	le.mu.Lock()
+	defer le.mu.Unlock()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var payload SnapshotPayload[K, V]
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	// Rebuild tree using BulkLoad (assumes records are sorted).
+	le.tree = BulkLoad(le.tree.order, payload.Records)
+	le.invertedIndex = payload.InvertedIndex
+	le.bf = NewBloomFilter(payload.BloomM, payload.BloomK)
+	le.bf.counts = payload.BloomCounts
+	// Rebuild BK-tree and tokens from invertedIndex keys.
+	le.bkTree = nil
+	le.tokens = make(map[string]struct{})
+	for token := range le.invertedIndex {
+		if le.bkTree == nil {
+			le.bkTree = NewBKTree(token)
+		} else {
+			le.bkTree.Insert(token)
+		}
+		le.tokens[token] = struct{}{}
+	}
+	return nil
 }
 
 type Person struct {
