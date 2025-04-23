@@ -1111,11 +1111,17 @@ func (le *LookupEngine[K, V]) BulkInsert(pairs []KeyValuePair[K, V]) {
 				bloomIncr:  make([]uint8, le.bf.m),
 				lastAccess: make(map[K]time.Time),
 			}
-			now := time.Now()
+			now := time.Now() // hoisted time.Now() for the entire worker
 			for j := start; j < end; j++ {
 				pair := pairs[j]
 				res.lastAccess[pair.Key] = now
-				keyBytes := []byte(fmt.Sprintf("%v", pair.Key))
+				// Use fast conversion if key is int
+				var keyBytes []byte
+				if v, ok := any(pair.Key).(int); ok {
+					keyBytes = []byte(strconv.Itoa(v))
+				} else {
+					keyBytes = []byte(fmt.Sprintf("%v", pair.Key))
+				}
 				h1, h2 := hashDouble(keyBytes)
 				for k := uint(0); k < le.bf.k; k++ {
 					idx := (h1 + uint(k)*h2) % le.bf.m
