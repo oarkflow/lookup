@@ -7,17 +7,20 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"unicode"
 )
 
 type Ordered interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~float32 | ~float64 | ~string
 }
 
-type Record interface{}
+type Record any
 
 type BPlusTree[K Ordered, V Record] struct {
 	order int
 	root  *bTreeNode[K, V]
+	mu    sync.RWMutex
 }
 
 type bTreeNode[K Ordered, V Record] struct {
@@ -28,31 +31,34 @@ type bTreeNode[K Ordered, V Record] struct {
 	next     *bTreeNode[K, V]
 }
 
-func newNode[K Ordered, V Record](leaf bool) *bTreeNode[K, V] {
-	return &bTreeNode[K, V]{
-		keys:     make([]K, 0, 8),
-		leaf:     leaf,
-		values:   nil,
-		children: nil,
-		next:     nil,
+func newNode[K Ordered, V Record](order int, leaf bool) *bTreeNode[K, V] {
+	node := &bTreeNode[K, V]{leaf: leaf, next: nil}
+	if leaf {
+		node.keys = make([]K, 0, order-1)
+		node.values = make([]V, 0, order-1)
+	} else {
+		node.keys = make([]K, 0, order-1)
+		node.children = make([]*bTreeNode[K, V], 0, order)
 	}
+	return node
 }
 
 func NewBPlusTree[K Ordered, V Record](order int) *BPlusTree[K, V] {
 	if order < 3 {
 		panic("B+ tree order must be at least 3")
 	}
-	root := newNode[K, V](true)
 	return &BPlusTree[K, V]{
 		order: order,
-		root:  root,
+		root:  newNode[K, V](order, true),
 	}
 }
 
 func (tree *BPlusTree[K, V]) Insert(key K, value V) {
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
 	root := tree.root
 	if len(root.keys) == tree.order {
-		newRoot := newNode[K, V](false)
+		newRoot := newNode[K, V](tree.order, false)
 		newRoot.children = append(newRoot.children, root)
 		tree.splitChild(newRoot, 0, root)
 		tree.root = newRoot
@@ -66,8 +72,8 @@ func (tree *BPlusTree[K, V]) insertNonFull(node *bTreeNode[K, V], key K, value V
 		node.keys = append(node.keys, key)
 		node.values = append(node.values, value)
 		copy(node.keys[idx+1:], node.keys[idx:])
-		node.keys[idx] = key
 		copy(node.values[idx+1:], node.values[idx:])
+		node.keys[idx] = key
 		node.values[idx] = value
 		return
 	}
@@ -85,7 +91,7 @@ func (tree *BPlusTree[K, V]) insertNonFull(node *bTreeNode[K, V], key K, value V
 func (tree *BPlusTree[K, V]) splitChild(parent *bTreeNode[K, V], idx int, child *bTreeNode[K, V]) {
 	mid := tree.order / 2
 	if child.leaf {
-		newLeaf := newNode[K, V](true)
+		newLeaf := newNode[K, V](tree.order, true)
 		newLeaf.keys = append(newLeaf.keys, child.keys[mid:]...)
 		newLeaf.values = append(newLeaf.values, child.values[mid:]...)
 		child.keys = child.keys[:mid]
@@ -93,28 +99,24 @@ func (tree *BPlusTree[K, V]) splitChild(parent *bTreeNode[K, V], idx int, child 
 		newLeaf.next = child.next
 		child.next = newLeaf
 		parent.keys = append(parent.keys, newLeaf.keys[0])
-		parent.children = append(parent.children, nil)
-		copy(parent.keys[idx+1:], parent.keys[idx:])
-		parent.keys[idx] = newLeaf.keys[0]
-		copy(parent.children[idx+2:], parent.children[idx+1:])
-		parent.children[idx+1] = newLeaf
+		parent.children = append(parent.children, newLeaf)
+		sort.Slice(parent.keys, func(i, j int) bool { return parent.keys[i] < parent.keys[j] })
 	} else {
-		newInternal := newNode[K, V](false)
+		newInternal := newNode[K, V](tree.order, false)
 		promoteKey := child.keys[mid]
 		newInternal.keys = append(newInternal.keys, child.keys[mid+1:]...)
 		newInternal.children = append(newInternal.children, child.children[mid+1:]...)
 		child.keys = child.keys[:mid]
 		child.children = child.children[:mid+1]
 		parent.keys = append(parent.keys, promoteKey)
-		parent.children = append(parent.children, nil)
-		copy(parent.keys[idx+1:], parent.keys[idx:])
-		parent.keys[idx] = promoteKey
-		copy(parent.children[idx+2:], parent.children[idx+1:])
-		parent.children[idx+1] = newInternal
+		parent.children = append(parent.children, newInternal)
+		sort.Slice(parent.keys, func(i, j int) bool { return parent.keys[i] < parent.keys[j] })
 	}
 }
 
 func (tree *BPlusTree[K, V]) Search(key K) (V, bool) {
+	tree.mu.RLock()
+	defer tree.mu.RUnlock()
 	node := tree.findLeaf(tree.root, key)
 	idx := sort.Search(len(node.keys), func(i int) bool { return node.keys[i] >= key })
 	if idx < len(node.keys) && node.keys[idx] == key {
@@ -132,12 +134,9 @@ func (tree *BPlusTree[K, V]) findLeaf(node *bTreeNode[K, V], key K) *bTreeNode[K
 	return tree.findLeaf(node.children[idx], key)
 }
 
-type KeyValuePair[K Ordered, V Record] struct {
-	Key   K
-	Value V
-}
-
 func (tree *BPlusTree[K, V]) InOrderTraversal() []KeyValuePair[K, V] {
+	tree.mu.RLock()
+	defer tree.mu.RUnlock()
 	var result []KeyValuePair[K, V]
 	node := tree.root
 	for !node.leaf {
@@ -152,13 +151,18 @@ func (tree *BPlusTree[K, V]) InOrderTraversal() []KeyValuePair[K, V] {
 	return result
 }
 
+type KeyValuePair[K Ordered, V Record] struct {
+	Key   K
+	Value V
+}
+
 type BloomFilter struct {
 	bitset []uint64
 	m      uint
 	k      uint
 }
 
-func NewBloomFilter(m uint, k uint) *BloomFilter {
+func NewBloomFilter(m, k uint) *BloomFilter {
 	size := (m + 63) / 64
 	return &BloomFilter{
 		bitset: make([]uint64, size),
@@ -168,8 +172,7 @@ func NewBloomFilter(m uint, k uint) *BloomFilter {
 }
 
 func (bf *BloomFilter) Add(data []byte) {
-	h1 := hash1(data)
-	h2 := hash2(data)
+	h1, h2 := hashDouble(data)
 	for i := uint(0); i < bf.k; i++ {
 		combined := (h1 + i*h2) % bf.m
 		bf.setBit(combined)
@@ -177,8 +180,7 @@ func (bf *BloomFilter) Add(data []byte) {
 }
 
 func (bf *BloomFilter) Test(data []byte) bool {
-	h1 := hash1(data)
-	h2 := hash2(data)
+	h1, h2 := hashDouble(data)
 	for i := uint(0); i < bf.k; i++ {
 		combined := (h1 + i*h2) % bf.m
 		if !bf.getBit(combined) {
@@ -186,6 +188,14 @@ func (bf *BloomFilter) Test(data []byte) bool {
 		}
 	}
 	return true
+}
+
+func hashDouble(data []byte) (uint, uint) {
+	h1 := fnv.New64a()
+	h1.Write(data)
+	h2 := fnv.New64()
+	h2.Write(data)
+	return uint(h1.Sum64()), uint(h2.Sum64())
 }
 
 func (bf *BloomFilter) setBit(i uint) {
@@ -200,73 +210,84 @@ func (bf *BloomFilter) getBit(i uint) bool {
 	return (bf.bitset[idx] & (1 << pos)) != 0
 }
 
-func hash1(data []byte) uint {
-	hasher := fnv.New64a()
-	hasher.Write(data)
-	return uint(hasher.Sum64())
-}
-
-func hash2(data []byte) uint {
-	hasher := fnv.New64()
-	hasher.Write(data)
-	return uint(hasher.Sum64()) | 1
-}
-
 type BKTree struct {
 	term     string
 	children map[int]*BKTree
 }
 
 func NewBKTree(term string) *BKTree {
-	return &BKTree{term: term, children: make(map[int]*BKTree)}
+	return &BKTree{
+		term:     term,
+		children: make(map[int]*BKTree),
+	}
 }
 
 func (tree *BKTree) Insert(term string) {
-	d := levenshtein(tree.term, term)
-	if child, ok := tree.children[d]; ok {
-		child.Insert(term)
-	} else {
-		tree.children[d] = NewBKTree(term)
+	current := tree
+	for {
+		d := levenshtein(current.term, term)
+		if d == 0 {
+			return
+		}
+		if child, ok := current.children[d]; ok {
+			current = child
+		} else {
+			current.children[d] = NewBKTree(term)
+			break
+		}
 	}
 }
 
 func (tree *BKTree) Search(term string, threshold int) []string {
 	var results []string
-	d := levenshtein(tree.term, term)
-	if d <= threshold {
-		results = append(results, tree.term)
-	}
-	for _, child := range tree.children {
-		results = append(results, child.Search(term, threshold)...)
+	queue := []*BKTree{tree}
+	term = strings.ToLower(term)
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		d := levenshtein(node.term, term)
+		if d <= threshold {
+			results = append(results, node.term)
+		}
+		minDist := d - threshold
+		maxDist := d + threshold
+		for dist, child := range node.children {
+			if dist >= minDist && dist <= maxDist {
+				queue = append(queue, child)
+			}
+		}
 	}
 	return results
 }
 
 func levenshtein(a, b string) int {
-	la, lb := len(a), len(b)
-	if la == 0 {
-		return lb
+	if a == b {
+		return 0
 	}
-	if lb == 0 {
-		return la
+	al, bl := len(a), len(b)
+	if al == 0 {
+		return bl
 	}
-	prev := make([]int, lb+1)
-	for j := 0; j <= lb; j++ {
-		prev[j] = j
+	if bl == 0 {
+		return al
 	}
-	for i := 1; i <= la; i++ {
-		curr := make([]int, lb+1)
-		curr[0] = i
-		for j := 1; j <= lb; j++ {
+	v0 := make([]int, bl+1)
+	v1 := make([]int, bl+1)
+	for i := 0; i <= bl; i++ {
+		v0[i] = i
+	}
+	for i := 0; i < al; i++ {
+		v1[0] = i + 1
+		for j := 0; j < bl; j++ {
 			cost := 0
-			if a[i-1] != b[j-1] {
+			if a[i] != b[j] {
 				cost = 1
 			}
-			curr[j] = min(curr[j-1]+1, min(prev[j]+1, prev[j-1]+cost))
+			v1[j+1] = min(v0[j]+cost, min(v0[j+1]+1, v1[j]+1))
 		}
-		prev = curr
+		v0, v1 = v1, v0
 	}
-	return prev[lb]
+	return v0[bl]
 }
 
 func min(a, b int) int {
@@ -276,21 +297,27 @@ func min(a, b int) int {
 	return b
 }
 
+var structFieldsCache sync.Map
+
 func tokenize(text string) []string {
-	return strings.Fields(strings.ToLower(text))
+	return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
 }
 
-func extractTokens(record interface{}) []string {
+func extractTokens(record any) []string {
 	var tokens []string
 	switch rec := record.(type) {
 	case string:
 		tokens = tokenize(rec)
 	case map[string]string:
+		tokens = make([]string, 0, len(rec)*2)
 		for k, v := range rec {
 			tokens = append(tokens, tokenize(k)...)
 			tokens = append(tokens, tokenize(v)...)
 		}
-	case map[string]interface{}:
+	case map[string]any:
+		tokens = make([]string, 0, len(rec)*2)
 		for k, v := range rec {
 			tokens = append(tokens, tokenize(k)...)
 			tokens = append(tokens, tokenize(fmt.Sprintf("%v", v))...)
@@ -299,11 +326,25 @@ func extractTokens(record interface{}) []string {
 		rv := reflect.ValueOf(record)
 		switch rv.Kind() {
 		case reflect.Struct:
-			for i := 0; i < rv.NumField(); i++ {
+			typ := rv.Type()
+			var indices []int
+			if cached, ok := structFieldsCache.Load(typ); ok {
+				indices = cached.([]int)
+			} else {
+				indices = make([]int, rv.NumField())
+				for i := 0; i < rv.NumField(); i++ {
+					indices[i] = i
+				}
+				structFieldsCache.Store(typ, indices)
+			}
+			tokens = make([]string, 0, len(indices))
+			for _, i := range indices {
 				tokens = append(tokens, tokenize(fmt.Sprintf("%v", rv.Field(i).Interface()))...)
 			}
 		case reflect.Slice, reflect.Array:
-			for i := 0; i < rv.Len(); i++ {
+			length := rv.Len()
+			tokens = make([]string, 0, length)
+			for i := 0; i < length; i++ {
 				tokens = append(tokens, tokenize(fmt.Sprintf("%v", rv.Index(i).Interface()))...)
 			}
 		default:
@@ -318,39 +359,43 @@ type LookupEngine[K Ordered, V Record] struct {
 	bf            *BloomFilter
 	invertedIndex map[string][]K
 	bkTree        *BKTree
-	bkTreeTokens  map[string]struct{} // new field
+	tokens        map[string]struct{}
+	mu            sync.RWMutex
 }
 
-func NewLookupEngine[K Ordered, V Record](treeOrder int, bfSize uint, bfHashes uint) *LookupEngine[K, V] {
+func NewLookupEngine[K Ordered, V Record](order int, bfSize, bfHashes uint) *LookupEngine[K, V] {
 	return &LookupEngine[K, V]{
-		tree:          NewBPlusTree[K, V](treeOrder),
+		tree:          NewBPlusTree[K, V](order),
 		bf:            NewBloomFilter(bfSize, bfHashes),
 		invertedIndex: make(map[string][]K),
-		bkTree:        nil,
-		bkTreeTokens:  make(map[string]struct{}), // initialize token cache
+		tokens:        make(map[string]struct{}),
 	}
 }
 
 func (le *LookupEngine[K, V]) Insert(key K, value V) {
 	keyBytes := []byte(fmt.Sprintf("%v", key))
+	le.mu.Lock()
+	defer le.mu.Unlock()
 	le.bf.Add(keyBytes)
 	le.tree.Insert(key, value)
 	tokens := extractTokens(value)
 	for _, token := range tokens {
 		le.invertedIndex[token] = append(le.invertedIndex[token], key)
-		if _, exists := le.bkTreeTokens[token]; !exists {
+		if _, exists := le.tokens[token]; !exists {
 			if le.bkTree == nil {
 				le.bkTree = NewBKTree(token)
 			} else {
 				le.bkTree.Insert(token)
 			}
-			le.bkTreeTokens[token] = struct{}{}
+			le.tokens[token] = struct{}{}
 		}
 	}
 }
 
 func (le *LookupEngine[K, V]) Search(key K) (V, bool) {
 	keyBytes := []byte(fmt.Sprintf("%v", key))
+	le.mu.RLock()
+	defer le.mu.RUnlock()
 	if !le.bf.Test(keyBytes) {
 		var zero V
 		return zero, false
@@ -359,46 +404,52 @@ func (le *LookupEngine[K, V]) Search(key K) (V, bool) {
 }
 
 func (le *LookupEngine[K, V]) InOrderTraversal() []KeyValuePair[K, V] {
+	le.mu.RLock()
+	defer le.mu.RUnlock()
 	return le.tree.InOrderTraversal()
 }
 
 func (le *LookupEngine[K, V]) KeywordSearch(query string) []KeyValuePair[K, V] {
-	var result []KeyValuePair[K, V]
+	le.mu.RLock()
+	defer le.mu.RUnlock()
 	word := strings.ToLower(query)
 	seen := make(map[K]struct{})
-	if keys, ok := le.invertedIndex[word]; ok {
+	var results []KeyValuePair[K, V]
+	if keys, exists := le.invertedIndex[word]; exists {
 		for _, k := range keys {
 			if _, found := seen[k]; !found {
 				if v, ok := le.tree.Search(k); ok {
-					result = append(result, KeyValuePair[K, V]{k, v})
+					results = append(results, KeyValuePair[K, V]{k, v})
 					seen[k] = struct{}{}
 				}
 			}
 		}
 	}
-	return result
+	return results
 }
 
 func (le *LookupEngine[K, V]) FuzzySearch(query string, threshold int) []KeyValuePair[K, V] {
-	var result []KeyValuePair[K, V]
+	le.mu.RLock()
+	defer le.mu.RUnlock()
+	var results []KeyValuePair[K, V]
 	if le.bkTree == nil {
-		return result
+		return results
 	}
 	matches := le.bkTree.Search(strings.ToLower(query), threshold)
 	seen := make(map[K]struct{})
-	for _, word := range matches {
-		if keys, ok := le.invertedIndex[word]; ok {
+	for _, token := range matches {
+		if keys, exists := le.invertedIndex[token]; exists {
 			for _, k := range keys {
 				if _, found := seen[k]; !found {
 					if v, ok := le.tree.Search(k); ok {
-						result = append(result, KeyValuePair[K, V]{k, v})
+						results = append(results, KeyValuePair[K, V]{k, v})
 						seen[k] = struct{}{}
 					}
 				}
 			}
 		}
 	}
-	return result
+	return results
 }
 
 type Query struct {
@@ -410,19 +461,27 @@ type Query struct {
 }
 
 func (le *LookupEngine[K, V]) Query(q Query) []KeyValuePair[K, V] {
-	resultMap := make(map[K]KeyValuePair[K, V])
+	le.mu.RLock()
+	defer le.mu.RUnlock()
+	resultSet := make(map[K]KeyValuePair[K, V])
 	for _, kw := range q.Keywords {
-		for _, pair := range le.KeywordSearch(strings.ToLower(kw)) {
-			resultMap[pair.Key] = pair
+		word := strings.ToLower(kw)
+		if keys, exists := le.invertedIndex[word]; exists {
+			for _, k := range keys {
+				if v, ok := le.tree.Search(k); ok {
+					resultSet[k] = KeyValuePair[K, V]{k, v}
+				}
+			}
 		}
 	}
-	for term, threshold := range q.Fuzzy {
-		for _, pair := range le.FuzzySearch(strings.ToLower(term), threshold) {
-			resultMap[pair.Key] = pair
+	for term, thr := range q.Fuzzy {
+		fuzzyResults := le.FuzzySearch(strings.ToLower(term), thr)
+		for _, pair := range fuzzyResults {
+			resultSet[pair.Key] = pair
 		}
 	}
-	results := make([]KeyValuePair[K, V], 0, len(resultMap))
-	for _, pair := range resultMap {
+	results := make([]KeyValuePair[K, V], 0, len(resultSet))
+	for _, pair := range resultSet {
 		results = append(results, pair)
 	}
 	if q.Sort != "" {
@@ -455,73 +514,58 @@ type Person struct {
 
 func main() {
 	leStr := NewLookupEngine[int, string](3, 1024, 3)
-	keysStr := []int{10, 20, 5, 6, 12, 30, 7, 17}
-	for _, k := range keysStr {
+	for _, k := range []int{10, 20, 5, 6, 12, 30, 7, 17} {
 		leStr.Insert(k, "Autocomplete record "+strconv.Itoa(k))
 	}
 	fmt.Println("String Records:")
-	for _, rec := range leStr.InOrderTraversal() {
-		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
+	for _, r := range leStr.InOrderTraversal() {
+		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
 	}
 	fmt.Println("Keyword Search for 'autocomplete':")
-	for _, rec := range leStr.KeywordSearch("autocomplete") {
-		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
+	for _, r := range leStr.KeywordSearch("autocomplete") {
+		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
 	}
 	fmt.Println("Fuzzy Search for 'autocomplet' (threshold 1):")
-	for _, rec := range leStr.FuzzySearch("autocomplet", 1) {
-		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
+	for _, r := range leStr.FuzzySearch("autocomplet", 1) {
+		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
 	}
-	query := Query{
-		Keywords: []string{"autocomplete"},
-		Fuzzy:    map[string]int{"autocomplet": 1},
-		Page:     1,
-		Size:     10,
-		Sort:     "asc",
-	}
+	q := Query{Keywords: []string{"autocomplete"}, Fuzzy: map[string]int{"autocomplet": 1}, Page: 1, Size: 10, Sort: "asc"}
 	fmt.Println("Combined Query Search:")
-	for _, rec := range leStr.Query(query) {
-		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
+	for _, r := range leStr.Query(q) {
+		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
 	}
 
 	leMap := NewLookupEngine[int, map[string]string](3, 1024, 3)
-	keysMap := []int{101, 102, 103}
-	recMap1 := map[string]string{"title": "Map Record One", "desc": "This is the first map record"}
-	recMap2 := map[string]string{"title": "Map Record Two", "desc": "Second record in a map"}
-	recMap3 := map[string]string{"title": "Another Map", "desc": "Map record three"}
-	leMap.Insert(keysMap[0], recMap1)
-	leMap.Insert(keysMap[1], recMap2)
-	leMap.Insert(keysMap[2], recMap3)
+	leMap.Insert(101, map[string]string{"title": "Map Record One", "desc": "This is the first map record"})
+	leMap.Insert(102, map[string]string{"title": "Map Record Two", "desc": "Second record in a map"})
+	leMap.Insert(103, map[string]string{"title": "Another Map", "desc": "Map record three"})
 	fmt.Println("\nMap Records:")
-	for _, rec := range leMap.InOrderTraversal() {
-		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
+	for _, r := range leMap.InOrderTraversal() {
+		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
 	}
 	fmt.Println("Keyword Search for 'record':")
-	for _, rec := range leMap.KeywordSearch("record") {
-		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
+	for _, r := range leMap.KeywordSearch("record") {
+		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
 	}
 	fmt.Println("Fuzzy Search for 'map' (threshold 0):")
-	for _, rec := range leMap.FuzzySearch("map", 0) {
-		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
+	for _, r := range leMap.FuzzySearch("map", 0) {
+		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
 	}
 
 	leStruct := NewLookupEngine[int, Person](3, 1024, 3)
-	keysStruct := []int{201, 202, 203}
-	recStruct1 := Person{Name: "Alice", Occupation: "Engineer", Email: "alice@example.com"}
-	recStruct2 := Person{Name: "Bob", Occupation: "Artist", Email: "bob@example.com"}
-	recStruct3 := Person{Name: "Charlie", Occupation: "Doctor", Email: "charlie@example.com"}
-	leStruct.Insert(keysStruct[0], recStruct1)
-	leStruct.Insert(keysStruct[1], recStruct2)
-	leStruct.Insert(keysStruct[2], recStruct3)
+	leStruct.Insert(201, Person{"Alice", "Engineer", "alice@example.com"})
+	leStruct.Insert(202, Person{"Bob", "Artist", "bob@example.com"})
+	leStruct.Insert(203, Person{"Charlie", "Doctor", "charlie@example.com"})
 	fmt.Println("\nStruct Records:")
-	for _, rec := range leStruct.InOrderTraversal() {
-		fmt.Printf("Key: %v, Value: %+v\n", rec.Key, rec.Value)
+	for _, r := range leStruct.InOrderTraversal() {
+		fmt.Printf("Key: %v, Value: %+v\n", r.Key, r.Value)
 	}
 	fmt.Println("Keyword Search for 'doctor':")
-	for _, rec := range leStruct.KeywordSearch("doctor") {
-		fmt.Printf("Key: %v, Value: %+v\n", rec.Key, rec.Value)
+	for _, r := range leStruct.KeywordSearch("doctor") {
+		fmt.Printf("Key: %v, Value: %+v\n", r.Key, r.Value)
 	}
 	fmt.Println("Fuzzy Search for 'Alic' (threshold 1):")
-	for _, rec := range leStruct.FuzzySearch("Alic", 1) {
-		fmt.Printf("Key: %v, Value: %+v\n", rec.Key, rec.Value)
+	for _, r := range leStruct.FuzzySearch("Alic", 1) {
+		fmt.Printf("Key: %v, Value: %+v\n", r.Key, r.Value)
 	}
 }
