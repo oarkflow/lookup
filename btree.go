@@ -408,6 +408,35 @@ func (le *LookupEngine[K, V]) FuzzySearch(query string, threshold int) []KeyValu
 	return result
 }
 
+// Add a new Query type to represent search queries similar to ElasticSearch.
+type Query struct {
+	Keywords []string       // Exact keyword search terms.
+	Fuzzy    map[string]int // Fuzzy search terms with thresholds.
+}
+
+// Add a new Query method to LookupEngine to combine keyword and fuzzy search.
+func (le *LookupEngine[K, V]) Query(q Query) []KeyValuePair[K, V] {
+	resultMap := make(map[K]KeyValuePair[K, V])
+	// Process exact keyword searches.
+	for _, kw := range q.Keywords {
+		for _, pair := range le.KeywordSearch(strings.ToLower(kw)) {
+			resultMap[pair.Key] = pair
+		}
+	}
+	// Process fuzzy searches.
+	for term, threshold := range q.Fuzzy {
+		for _, pair := range le.FuzzySearch(strings.ToLower(term), threshold) {
+			resultMap[pair.Key] = pair
+		}
+	}
+	// Convert map to slice.
+	var results []KeyValuePair[K, V]
+	for _, pair := range resultMap {
+		results = append(results, pair)
+	}
+	return results
+}
+
 type Person struct {
 	Name       string
 	Occupation string
@@ -430,6 +459,15 @@ func main() {
 	}
 	fmt.Println("Fuzzy Search for 'autocomplet' (threshold 1):")
 	for _, rec := range leStr.FuzzySearch("autocomplet", 1) {
+		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
+	}
+	// New combined query API test.
+	query := Query{
+		Keywords: []string{"autocomplete"},
+		Fuzzy:    map[string]int{"autocomplet": 1},
+	}
+	fmt.Println("Combined Query Search:")
+	for _, rec := range leStr.Query(query) {
 		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
 	}
 
