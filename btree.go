@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime" // added
 	"sort"
 	"strconv"
 	"strings"
@@ -247,8 +248,13 @@ func (tree *BPlusTree[K, V]) LowerBound(key K) []KeyValuePair[K, V] {
 
 func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlusTree[K, V] {
 	tree := &BPlusTree[K, V]{order: order}
+	// Added: handle empty input to avoid nil leaf access.
+	if len(pairs) == 0 {
+		tree.root = newNode[K, V](order, true)
+		return tree
+	}
 	var leaves []*bTreeNode[K, V]
-	var leaf *bTreeNode[K, V] = newNode[K, V](order, true)
+	leaf := newNode[K, V](order, true)
 	for _, pair := range pairs {
 		if len(leaf.keys) == order-1 {
 			leaves = append(leaves, leaf)
@@ -264,14 +270,18 @@ func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlus
 	nodes := leaves
 	for len(nodes) > 1 {
 		var parents []*bTreeNode[K, V]
-		var parent *bTreeNode[K, V] = newNode[K, V](order, false)
+		parent := newNode[K, V](order, false)
+		// Build internal nodes: add key only for children after the first.
 		for _, node := range nodes {
 			if len(parent.children) == order {
 				parents = append(parents, parent)
 				parent = newNode[K, V](order, false)
 			}
 			parent.children = append(parent.children, node)
-			parent.keys = append(parent.keys, node.keys[0])
+			// Modified: only append if node.keys is non-empty.
+			if len(parent.children) > 1 && len(node.keys) > 0 {
+				parent.keys = append(parent.keys, node.keys[0])
+			}
 		}
 		parents = append(parents, parent)
 		nodes = parents
@@ -1049,6 +1059,95 @@ func (le *LookupEngine[K, V]) LoadInvertedIndex(path string) error {
 	return nil
 }
 
+// Modified: BulkInsert now processes records concurrently.
+func (le *LookupEngine[K, V]) BulkInsert(pairs []KeyValuePair[K, V]) {
+	le.mu.Lock()
+	defer le.mu.Unlock()
+	le.tree = BulkLoad(le.tree.order, pairs)
+	// Prepare new indexes concurrently.
+	numWorkers := runtime.NumCPU()
+	chunkSize := (len(pairs) + numWorkers - 1) / numWorkers
+
+	type workerResult struct {
+		invIdx     map[string][]K
+		tokens     map[string]struct{}
+		bloomIncr  []uint8 // length = le.bf.m
+		lastAccess map[K]time.Time
+	}
+
+	results := make([]workerResult, numWorkers)
+	var wg sync.WaitGroup
+
+	for i := 0; i < numWorkers; i++ {
+		startIdx := i * chunkSize
+		endIdx := startIdx + chunkSize
+		if endIdx > len(pairs) {
+			endIdx = len(pairs)
+		}
+		wg.Add(1)
+		go func(i, start, end int) {
+			defer wg.Done()
+			res := workerResult{
+				invIdx:     make(map[string][]K),
+				tokens:     make(map[string]struct{}),
+				bloomIncr:  make([]uint8, le.bf.m),
+				lastAccess: make(map[K]time.Time),
+			}
+			now := time.Now()
+			for j := start; j < end; j++ {
+				pair := pairs[j]
+				res.lastAccess[pair.Key] = now
+				keyBytes := []byte(fmt.Sprintf("%v", pair.Key))
+				h1, h2 := hashDouble(keyBytes)
+				for k := uint(0); k < le.bf.k; k++ {
+					idx := (h1 + uint(k)*h2) % le.bf.m
+					res.bloomIncr[idx]++
+				}
+				toks := extractTokens(pair.Value)
+				for _, token := range toks {
+					res.invIdx[token] = append(res.invIdx[token], pair.Key)
+					res.tokens[token] = struct{}{}
+				}
+			}
+			results[i] = res
+		}(i, startIdx, endIdx)
+	}
+	wg.Wait()
+
+	// Merge worker results.
+	le.invertedIndex = make(map[string][]K)
+	le.lastAccess = make(map[K]time.Time)
+	newCounts := make([]uint8, le.bf.m)
+	globalTokens := make(map[string]struct{})
+	for _, res := range results {
+		for k, v := range res.lastAccess {
+			le.lastAccess[k] = v
+		}
+		for token, keys := range res.invIdx {
+			le.invertedIndex[token] = append(le.invertedIndex[token], keys...)
+		}
+		for i, count := range res.bloomIncr {
+			newCounts[i] += count
+		}
+		for token := range res.tokens {
+			globalTokens[token] = struct{}{}
+		}
+	}
+	le.bf = NewBloomFilter(le.bf.m, le.bf.k)
+	le.bf.counts = newCounts
+
+	// Rebuild BKTree from the collected tokens.
+	le.tokens = globalTokens
+	le.bkTree = nil
+	for token := range globalTokens {
+		if le.bkTree == nil {
+			le.bkTree = NewBKTree(token)
+		} else {
+			le.bkTree.Insert(token)
+		}
+	}
+}
+
 type Person struct {
 	Name       string
 	Occupation string
@@ -1114,7 +1213,7 @@ func main() {
 	// New block: generate 1 million []map[string]any records and apply searches/lookup.
 	leAny := NewLookupEngine[int, map[string]any](3, 1024, 3)
 	const recordsCount = 1000000
-	start := time.Now()
+	var pairs []KeyValuePair[int, map[string]any]
 	for i := 1; i <= recordsCount; i++ {
 		rec := map[string]any{
 			"Field1":  fmt.Sprintf("Record %d", i),
@@ -1128,8 +1227,10 @@ func main() {
 			"Field9":  fmt.Sprintf("Param %d", i),
 			"Field10": fmt.Sprintf("Item %d", i),
 		}
-		leAny.Insert(i, rec)
+		pairs = append(pairs, KeyValuePair[int, map[string]any]{Key: i, Value: rec})
 	}
+	start := time.Now()
+	leAny.BulkInsert(pairs)
 	fmt.Printf("Inserted %d records in %v\n", recordsCount, time.Since(start))
 	fmt.Println("\nMap[string]any Records Keyword Search for 'record':")
 	results := leAny.KeywordSearch("record")
