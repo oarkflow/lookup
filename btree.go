@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -27,7 +28,7 @@ type BPlusTree[K Ordered, V Record] struct {
 }
 
 type bTreeNode[K Ordered, V Record] struct {
-	mu       sync.RWMutex // new per-node lock
+	mu       sync.RWMutex
 	keys     []K
 	children []*bTreeNode[K, V]
 	values   []V
@@ -73,12 +74,10 @@ func (tree *BPlusTree[K, V]) Insert(key K, value V) {
 func (tree *BPlusTree[K, V]) insertNonFull(node *bTreeNode[K, V], key K, value V) {
 	if node.leaf {
 		idx := sort.Search(len(node.keys), func(i int) bool { return node.keys[i] >= key })
-		// if key exists, update value
 		if idx < len(node.keys) && node.keys[idx] == key {
 			node.values[idx] = value
 			return
 		}
-		// now insert new key/value in one splice operation
 		node.keys = append(node.keys, key)
 		node.values = append(node.values, value)
 		copy(node.keys[idx+1:], node.keys[idx:])
@@ -165,7 +164,6 @@ func (tree *BPlusTree[K, V]) Delete(key K) bool {
 	tree.mu.Lock()
 	defer tree.mu.Unlock()
 	deleted := tree.deleteInternal(tree.root, key)
-	// if root is nonleaf with only one child, make that child the new root
 	if !tree.root.leaf && len(tree.root.children) == 1 {
 		tree.root = tree.root.children[0]
 	}
@@ -176,23 +174,19 @@ func (tree *BPlusTree[K, V]) deleteInternal(node *bTreeNode[K, V], key K) bool {
 	if node.leaf {
 		idx := sort.Search(len(node.keys), func(i int) bool { return node.keys[i] >= key })
 		if idx < len(node.keys) && node.keys[idx] == key {
-			// Remove the key and its value.
 			node.keys = append(node.keys[:idx], node.keys[idx+1:]...)
 			node.values = append(node.values[:idx], node.values[idx+1:]...)
 			return true
 		}
 		return false
 	}
-	// internal node deletion
 	idx := sort.Search(len(node.keys), func(i int) bool { return key < node.keys[i] })
 	deleted := tree.deleteInternal(node.children[idx], key)
 	if !deleted {
 		return false
 	}
-	// Underflow handling: if child is under minimum keys, try redistribution/merge.
 	minKeys := (tree.order - 1) / 2
 	if len(node.children[idx].keys) < minKeys {
-		// Try to borrow from left sibling.
 		if idx > 0 && len(node.children[idx-1].keys) > minKeys {
 			child := node.children[idx]
 			left := node.children[idx-1]
@@ -202,7 +196,6 @@ func (tree *BPlusTree[K, V]) deleteInternal(node *bTreeNode[K, V], key K) bool {
 			left.keys = left.keys[:len(left.keys)-1]
 			left.values = left.values[:len(left.values)-1]
 		} else if idx < len(node.children)-1 && len(node.children[idx+1].keys) > minKeys {
-			// or borrow from right sibling.
 			child := node.children[idx]
 			right := node.children[idx+1]
 			child.keys = append(child.keys, node.keys[idx])
@@ -211,7 +204,6 @@ func (tree *BPlusTree[K, V]) deleteInternal(node *bTreeNode[K, V], key K) bool {
 			right.keys = right.keys[1:]
 			right.values = right.values[1:]
 		} else {
-			// Otherwise merge with a sibling.
 			if idx > 0 {
 				left := node.children[idx-1]
 				child := node.children[idx]
@@ -238,7 +230,6 @@ func (tree *BPlusTree[K, V]) LowerBound(key K) []KeyValuePair[K, V] {
 	tree.mu.RLock()
 	defer tree.mu.RUnlock()
 	var result []KeyValuePair[K, V]
-	// traverse to appropriate leaf
 	node := tree.root
 	for !node.leaf {
 		idx := sort.Search(len(node.keys), func(i int) bool { return key < node.keys[i] })
@@ -256,7 +247,6 @@ func (tree *BPlusTree[K, V]) LowerBound(key K) []KeyValuePair[K, V] {
 
 func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlusTree[K, V] {
 	tree := &BPlusTree[K, V]{order: order}
-	// Build leaf nodes.
 	var leaves []*bTreeNode[K, V]
 	var leaf *bTreeNode[K, V] = newNode[K, V](order, true)
 	for _, pair := range pairs {
@@ -268,11 +258,9 @@ func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlus
 		leaf.values = append(leaf.values, pair.Value)
 	}
 	leaves = append(leaves, leaf)
-	// Link leaves.
 	for i := 0; i < len(leaves)-1; i++ {
 		leaves[i].next = leaves[i+1]
 	}
-	// Build internal layers.
 	nodes := leaves
 	for len(nodes) > 1 {
 		var parents []*bTreeNode[K, V]
@@ -298,13 +286,12 @@ type KeyValuePair[K Ordered, V Record] struct {
 }
 
 type BloomFilter struct {
-	counts []uint8 // was bitset []uint64; now one counter per bit
+	counts []uint8
 	m      uint
 	k      uint
 }
 
 func NewBloomFilter(m, k uint) *BloomFilter {
-	// allocate one counter per bit (m counters)
 	return &BloomFilter{
 		counts: make([]uint8, m),
 		m:      m,
@@ -401,15 +388,12 @@ func (tree *BKTree) Search(term string, threshold int) []string {
 
 func (tree *BKTree) Delete(term string) bool {
 	term = strings.ToLower(term)
-	// if current node matches and has children then promote one child.
 	if tree.term == term {
 		if len(tree.children) == 0 {
-			// cannot delete the only node
 			return false
 		}
 		for d, child := range tree.children {
 			tree.term = child.term
-			// merge grandchildren into current node.
 			for cd, gc := range child.children {
 				tree.children[cd] = gc
 			}
@@ -417,11 +401,9 @@ func (tree *BKTree) Delete(term string) bool {
 			return true
 		}
 	} else {
-		// find the child branch matching the distance.
 		d := levenshtein(tree.term, term)
 		if child, ok := tree.children[d]; ok {
 			deleted := child.Delete(term)
-			// if deletion made the child empty, remove it.
 			if deleted && len(child.children) == 0 && child.term == term {
 				delete(tree.children, d)
 			}
@@ -526,19 +508,19 @@ func extractTokens(record any) []string {
 }
 
 type LookupEngine[K Ordered, V Record] struct {
-	tree          *BPlusTree[K, V]
-	bf            *BloomFilter
-	invertedIndex map[string][]K
-	bkTree        *BKTree
-	tokens        map[string]struct{}
-	mu            sync.RWMutex
-
-	// New fields for WAL, TTL, and API metrics
-	walPath string
-	walMu   sync.Mutex
-	walFile *os.File
-	ttl     map[K]time.Time
-	metrics map[string]int
+	tree            *BPlusTree[K, V]
+	bf              *BloomFilter
+	invertedIndex   map[string][]K
+	bkTree          *BKTree
+	tokens          map[string]struct{}
+	mu              sync.RWMutex
+	walPath         string
+	walMu           sync.Mutex
+	walFile         *os.File
+	ttl             map[K]time.Time
+	metrics         map[string]int
+	lastAccess      map[K]time.Time
+	persistencePath string
 }
 
 func NewLookupEngine[K Ordered, V Record](order int, bfSize, bfHashes uint) *LookupEngine[K, V] {
@@ -547,10 +529,10 @@ func NewLookupEngine[K Ordered, V Record](order int, bfSize, bfHashes uint) *Loo
 		bf:            NewBloomFilter(bfSize, bfHashes),
 		invertedIndex: make(map[string][]K),
 		tokens:        make(map[string]struct{}),
+		lastAccess:    make(map[K]time.Time),
 	}
 }
 
-// New method to set the WAL file.
 func (le *LookupEngine[K, V]) SetWAL(path string) error {
 	le.walMu.Lock()
 	defer le.walMu.Unlock()
@@ -563,7 +545,6 @@ func (le *LookupEngine[K, V]) SetWAL(path string) error {
 	return nil
 }
 
-// Define a WAL record structure.
 type walRecord[K Ordered, V Record] struct {
 	Op        string    `json:"op"`
 	Timestamp time.Time `json:"ts"`
@@ -572,7 +553,6 @@ type walRecord[K Ordered, V Record] struct {
 	TTL       int64     `json:"ttl,omitempty"`
 }
 
-// Helper to append a record to the WAL.
 func (le *LookupEngine[K, V]) appendWAL(rec walRecord[K, V]) {
 	le.walMu.Lock()
 	defer le.walMu.Unlock()
@@ -586,16 +566,15 @@ func (le *LookupEngine[K, V]) appendWAL(rec walRecord[K, V]) {
 	le.walFile.Write(append(data, '\n'))
 }
 
-// New UpsertWithTTL: upsert record with a TTL in seconds.
 func (le *LookupEngine[K, V]) UpsertWithTTL(key K, value V, ttlSeconds int) {
 	le.mu.Lock()
 	defer le.mu.Unlock()
 	if le.ttl == nil {
 		le.ttl = make(map[K]time.Time)
 	}
-	// Set expiry time.
 	le.ttl[key] = time.Now().Add(time.Duration(ttlSeconds) * time.Second)
 	le.tree.Insert(key, value)
+	le.lastAccess[key] = time.Now()
 	keyBytes := []byte(fmt.Sprintf("%v", key))
 	le.bf.Add(keyBytes)
 	tokens := extractTokens(value)
@@ -628,6 +607,7 @@ func (le *LookupEngine[K, V]) Insert(key K, value V) {
 	le.mu.Lock()
 	defer le.mu.Unlock()
 	le.tree.Insert(key, value)
+	le.lastAccess[key] = time.Now()
 	keyBytes := []byte(fmt.Sprintf("%v", key))
 	le.bf.Add(keyBytes)
 	tokens := extractTokens(value)
@@ -667,7 +647,11 @@ func (le *LookupEngine[K, V]) Search(key K) (V, bool) {
 		var zero V
 		return zero, false
 	}
-	return le.tree.Search(key)
+	val, ok := le.tree.Search(key)
+	if ok {
+		le.lastAccess[key] = time.Now()
+	}
+	return val, ok
 }
 
 func (le *LookupEngine[K, V]) InOrderTraversal() []KeyValuePair[K, V] {
@@ -806,7 +790,6 @@ func (le *LookupEngine[K, V]) Query(q Query) []KeyValuePair[K, V] {
 	return results
 }
 
-// Add snapshot payload struct for persistence.
 type SnapshotPayload[K Ordered, V Record] struct {
 	Records       []KeyValuePair[K, V] `json:"records"`
 	InvertedIndex map[string][]K       `json:"inverted_index"`
@@ -815,7 +798,6 @@ type SnapshotPayload[K Ordered, V Record] struct {
 	BloomK        uint                 `json:"bloom_k"`
 }
 
-// Replace SaveSnapshot implementation.
 func (le *LookupEngine[K, V]) SaveSnapshot(path string) error {
 	le.mu.RLock()
 	defer le.mu.RUnlock()
@@ -833,7 +815,6 @@ func (le *LookupEngine[K, V]) SaveSnapshot(path string) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// Replace LoadSnapshot implementation.
 func (le *LookupEngine[K, V]) LoadSnapshot(path string) error {
 	le.mu.Lock()
 	defer le.mu.Unlock()
@@ -845,12 +826,94 @@ func (le *LookupEngine[K, V]) LoadSnapshot(path string) error {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return err
 	}
-	// Rebuild tree using BulkLoad (assumes records are sorted).
 	le.tree = BulkLoad(le.tree.order, payload.Records)
 	le.invertedIndex = payload.InvertedIndex
 	le.bf = NewBloomFilter(payload.BloomM, payload.BloomK)
 	le.bf.counts = payload.BloomCounts
-	// Rebuild BK-tree and tokens from invertedIndex keys.
+	le.bkTree = nil
+	le.tokens = make(map[string]struct{})
+	for token := range le.invertedIndex {
+		if le.bkTree == nil {
+			le.bkTree = NewBKTree(token)
+		} else {
+			le.bkTree.Insert(token)
+		}
+		le.tokens[token] = struct{}{}
+	}
+	return nil
+}
+
+func (le *LookupEngine[K, V]) StartBackgroundCleaner(cleanInterval, evictionDuration time.Duration) {
+	go func() {
+		ticker := time.NewTicker(cleanInterval)
+		for range ticker.C {
+			le.mu.Lock()
+			now := time.Now()
+			for key, last := range le.lastAccess {
+				if now.Sub(last) > evictionDuration {
+					if exp, exists := le.ttl[key]; !exists || now.After(exp) {
+						le.tree.Delete(key)
+						keyBytes := []byte(fmt.Sprintf("%v", key))
+						le.bf.Remove(keyBytes)
+						for token, keys := range le.invertedIndex {
+							for i, k := range keys {
+								if k == key {
+									le.invertedIndex[token] = append(keys[:i], keys[i+1:]...)
+									break
+								}
+							}
+						}
+						delete(le.ttl, key)
+						delete(le.lastAccess, key)
+					}
+				}
+			}
+			le.PersistInvertedIndex(le.persistencePath)
+			le.mu.Unlock()
+		}
+	}()
+}
+
+func (le *LookupEngine[K, V]) PersistInvertedIndex(path string) {
+	data, err := json.Marshal(le.invertedIndex)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to marshal inverted index: %v\n", err)
+		return
+	}
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, "inverted_index_*.tmp")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create temporary file: %v\n", err)
+		return
+	}
+	tmpName := tmpFile.Name()
+	if _, err := tmpFile.Write(data); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write to temporary file: %v\n", err)
+		tmpFile.Close()
+		return
+	}
+	if err := tmpFile.Sync(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to sync temporary file: %v\n", err)
+		tmpFile.Close()
+		return
+	}
+	tmpFile.Close()
+	if err = os.Rename(tmpName, path); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to rename temporary file: %v\n", err)
+		return
+	}
+}
+
+func (le *LookupEngine[K, V]) LoadInvertedIndex(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var idx map[string][]K
+	if err := json.Unmarshal(data, &idx); err != nil {
+		return err
+	}
+	le.invertedIndex = idx
 	le.bkTree = nil
 	le.tokens = make(map[string]struct{})
 	for token := range le.invertedIndex {
@@ -872,6 +935,7 @@ type Person struct {
 
 func main() {
 	leStr := NewLookupEngine[int, string](3, 1024, 3)
+	leStr.StartBackgroundCleaner(1*time.Minute, 5*time.Minute)
 	for _, k := range []int{10, 20, 5, 6, 12, 30, 7, 17} {
 		leStr.Insert(k, "Autocomplete record "+strconv.Itoa(k))
 	}
@@ -892,7 +956,6 @@ func main() {
 	for _, r := range leStr.Query(q) {
 		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
 	}
-
 	leMap := NewLookupEngine[int, map[string]string](3, 1024, 3)
 	leMap.Insert(101, map[string]string{"title": "Map Record One", "desc": "This is the first map record"})
 	leMap.Insert(102, map[string]string{"title": "Map Record Two", "desc": "Second record in a map"})
@@ -909,7 +972,6 @@ func main() {
 	for _, r := range leMap.FuzzySearch("map", 0) {
 		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
 	}
-
 	leStruct := NewLookupEngine[int, Person](3, 1024, 3)
 	leStruct.Insert(201, Person{"Alice", "Engineer", "alice@example.com"})
 	leStruct.Insert(202, Person{"Bob", "Artist", "bob@example.com"})
