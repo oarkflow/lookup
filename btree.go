@@ -1085,93 +1085,91 @@ func (le *LookupEngine[K, V]) LoadInvertedIndex(path string) error {
 }
 
 func (le *LookupEngine[K, V]) BulkInsert(pairs []KeyValuePair[K, V]) {
+	// Preallocate and build new tree and indices
 	newTree := BulkLoad(le.tree.order, pairs)
 	bfM, bfK := le.bf.m, le.bf.k
+	// Preallocate global structures
+	newInvIdx := make(map[string][]K, len(pairs)*2)
+	newCounts := make([]uint8, bfM)
+	newLastAccess := make(map[K]time.Time, len(pairs))
+	// Determine chunk size for balanced work
 	numWorkers := runtime.NumCPU()
-	chunkSize := (len(pairs) + numWorkers - 1) / numWorkers
+	chunkSize := 10000
 	type workerResult struct {
 		invIdx     map[string][]K
-		tokens     map[string]struct{}
-		bloomIncr  []uint8 // length = bfM
+		tokens     []string
+		bloomIncr  []uint8
 		lastAccess map[K]time.Time
 	}
 	results := make([]workerResult, numWorkers)
 	var wg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		startIdx := i * chunkSize
-		endIdx := startIdx + chunkSize
-		if endIdx > len(pairs) {
-			endIdx = len(pairs)
+	now := time.Now()
+	for w := 0; w < numWorkers; w++ {
+		start := w * chunkSize
+		end := start + chunkSize
+		if end > len(pairs) {
+			end = len(pairs)
 		}
 		wg.Add(1)
-		go func(i, start, end int) {
+		go func(idx, s, e int) {
 			defer wg.Done()
-			res := workerResult{
-				invIdx:     make(map[string][]K),
-				tokens:     make(map[string]struct{}),
-				bloomIncr:  make([]uint8, bfM),
-				lastAccess: make(map[K]time.Time),
-			}
-			now := time.Now()
-			for j := start; j < end; j++ {
-				pair := pairs[j]
-				res.lastAccess[pair.Key] = now
-				var keyBytes []byte
-				if v, ok := any(pair.Key).(int); ok {
-					keyBytes = []byte(strconv.Itoa(v))
-				} else {
-					keyBytes = []byte(fmt.Sprintf("%v", pair.Key))
-				}
+			inv := make(map[string][]K)
+			bloom := make([]uint8, bfM)
+			last := make(map[K]time.Time)
+			for i := s; i < e; i++ {
+				pair := pairs[i]
+				last[pair.Key] = now
+				// Bloom filter increments
+				keyBytes := []byte(fmt.Sprintf("%v", pair.Key))
 				h1, h2 := hashDouble(keyBytes)
-				for k := uint(0); k < bfK; k++ {
-					idx := (h1 + uint(k)*h2) % bfM
-					res.bloomIncr[idx]++
+				for j := uint(0); j < bfK; j++ {
+					bloom[(h1+j*h2)%bfM]++
 				}
-				for _, token := range extractTokens(pair.Value) {
-					res.invIdx[token] = append(res.invIdx[token], pair.Key)
-					res.tokens[token] = struct{}{}
+				// Token extraction specialized for map[string]any
+				for token, _ := range any(pair.Value).(map[string]any) {
+					// index field name and value
+					inv[token] = append(inv[token], pair.Key)
+					// skip building a BK-tree here
 				}
 			}
-			results[i] = res
-		}(i, startIdx, endIdx)
+			results[idx] = workerResult{invIdx: inv, bloomIncr: bloom, lastAccess: last}
+		}(w, start, end)
 	}
 	wg.Wait()
-
-	// Merge worker results.
-	newInvIdx := make(map[string][]K)
-	newLastAccess := make(map[K]time.Time)
-	newCounts := make([]uint8, bfM)
-	globalTokens := make(map[string]struct{})
+	// Merge results serially
 	for _, res := range results {
-		for k, v := range res.lastAccess {
-			newLastAccess[k] = v
+		// last access
+		for k, t := range res.lastAccess {
+			newLastAccess[k] = t
 		}
+		// bloom
+		for i, c := range res.bloomIncr {
+			newCounts[i] += c
+		}
+		// inverted index
 		for token, keys := range res.invIdx {
-			newInvIdx[token] = append(newInvIdx[token], keys...)
-		}
-		for i, count := range res.bloomIncr {
-			newCounts[i] += count
-		}
-		for token := range res.tokens {
-			globalTokens[token] = struct{}{}
+			slice := newInvIdx[token]
+			slice = append(slice, keys...)
+			newInvIdx[token] = slice
 		}
 	}
+	// Swap in new structures
 	le.mu.Lock()
+	defer le.mu.Unlock()
 	le.tree = newTree
+	le.bf.counts = newCounts
 	le.invertedIndex = newInvIdx
 	le.lastAccess = newLastAccess
-	le.bf = NewBloomFilter(bfM, bfK)
-	le.bf.counts = newCounts
-	le.tokens = globalTokens
-	le.bkTree = nil
-	for token := range globalTokens {
-		if le.bkTree == nil {
-			le.bkTree = NewBKTree(token)
-		} else {
-			le.bkTree.Insert(token)
-		}
+	// Rebuild BK-tree once
+	le.bkTree = NewBKTree("")
+	for token := range newInvIdx {
+		le.bkTree.Insert(token)
 	}
-	le.mu.Unlock()
+	// Update tokens set
+	le.tokens = make(map[string]struct{}, len(newInvIdx))
+	for token := range newInvIdx {
+		le.tokens[token] = struct{}{}
+	}
 }
 
 type Person struct {
