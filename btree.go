@@ -30,7 +30,7 @@ type bTreeNode[K Ordered, V Record] struct {
 
 func newNode[K Ordered, V Record](leaf bool) *bTreeNode[K, V] {
 	return &bTreeNode[K, V]{
-		keys:     make([]K, 0),
+		keys:     make([]K, 0, 8),
 		leaf:     leaf,
 		values:   nil,
 		children: nil,
@@ -428,7 +428,7 @@ func (le *LookupEngine[K, V]) Query(q Query) []KeyValuePair[K, V] {
 			resultMap[pair.Key] = pair
 		}
 	}
-	var results []KeyValuePair[K, V]
+	results := make([]KeyValuePair[K, V], 0, len(resultMap))
 	for _, pair := range resultMap {
 		results = append(results, pair)
 	}
@@ -478,10 +478,12 @@ func main() {
 	for _, rec := range leStr.FuzzySearch("autocomplet", 1) {
 		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
 	}
-
 	query := Query{
 		Keywords: []string{"autocomplete"},
 		Fuzzy:    map[string]int{"autocomplet": 1},
+		Page:     1,
+		Size:     10,
+		Sort:     "asc",
 	}
 	fmt.Println("Combined Query Search:")
 	for _, rec := range leStr.Query(query) {
