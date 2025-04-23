@@ -243,33 +243,30 @@ func (tree *BKTree) Search(term string, threshold int) []string {
 }
 
 func levenshtein(a, b string) int {
-	al, bl := len(a), len(b)
-	if al == 0 {
-		return bl
+	la, lb := len(a), len(b)
+	if la == 0 {
+		return lb
 	}
-	if bl == 0 {
-		return al
+	if lb == 0 {
+		return la
 	}
-	dp := make([][]int, al+1)
-	for i := range dp {
-		dp[i] = make([]int, bl+1)
+	prev := make([]int, lb+1)
+	for j := 0; j <= lb; j++ {
+		prev[j] = j
 	}
-	for i := 0; i <= al; i++ {
-		dp[i][0] = i
-	}
-	for j := 0; j <= bl; j++ {
-		dp[0][j] = j
-	}
-	for i := 1; i <= al; i++ {
-		for j := 1; j <= bl; j++ {
+	for i := 1; i <= la; i++ {
+		curr := make([]int, lb+1)
+		curr[0] = i
+		for j := 1; j <= lb; j++ {
 			cost := 0
 			if a[i-1] != b[j-1] {
 				cost = 1
 			}
-			dp[i][j] = min(dp[i-1][j]+1, min(dp[i][j-1]+1, dp[i-1][j-1]+cost))
+			curr[j] = min(curr[j-1]+1, min(prev[j]+1, prev[j-1]+cost))
 		}
+		prev = curr
 	}
-	return dp[al][bl]
+	return prev[lb]
 }
 
 func min(a, b int) int {
@@ -321,6 +318,7 @@ type LookupEngine[K Ordered, V Record] struct {
 	bf            *BloomFilter
 	invertedIndex map[string][]K
 	bkTree        *BKTree
+	bkTreeTokens  map[string]struct{} // new field
 }
 
 func NewLookupEngine[K Ordered, V Record](treeOrder int, bfSize uint, bfHashes uint) *LookupEngine[K, V] {
@@ -329,6 +327,7 @@ func NewLookupEngine[K Ordered, V Record](treeOrder int, bfSize uint, bfHashes u
 		bf:            NewBloomFilter(bfSize, bfHashes),
 		invertedIndex: make(map[string][]K),
 		bkTree:        nil,
+		bkTreeTokens:  make(map[string]struct{}), // initialize token cache
 	}
 }
 
@@ -339,19 +338,13 @@ func (le *LookupEngine[K, V]) Insert(key K, value V) {
 	tokens := extractTokens(value)
 	for _, token := range tokens {
 		le.invertedIndex[token] = append(le.invertedIndex[token], key)
-		if le.bkTree == nil {
-			le.bkTree = NewBKTree(token)
-		} else {
-			exists := false
-			for _, candidate := range le.bkTree.Search(token, 0) {
-				if candidate == token {
-					exists = true
-					break
-				}
-			}
-			if !exists {
+		if _, exists := le.bkTreeTokens[token]; !exists {
+			if le.bkTree == nil {
+				le.bkTree = NewBKTree(token)
+			} else {
 				le.bkTree.Insert(token)
 			}
+			le.bkTreeTokens[token] = struct{}{}
 		}
 	}
 }
