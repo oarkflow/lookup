@@ -790,6 +790,128 @@ func (le *LookupEngine[K, V]) Query(q Query) []KeyValuePair[K, V] {
 	return results
 }
 
+// New query types for multi-query search
+type TermQuery struct {
+	Term string `json:"term"`
+}
+
+type BooleanQuery struct {
+	Must    []any `json:"must"`
+	MustNot []any `json:"must_not"`
+	Should  []any `json:"should"`
+}
+
+type KeyValueQuery struct {
+	Field string `json:"field"`
+	Value string `json:"value"`
+	Exact bool   `json:"exact"`
+}
+
+// MultiQuery processes different query types.
+// Supports TermQuery (keyword search), BooleanQuery (conditional search),
+// and KeyValueQuery (field filter); others can be added similarly.
+func (le *LookupEngine[K, V]) MultiQuery(q any) []KeyValuePair[K, V] {
+	resultSet := make(map[K]KeyValuePair[K, V])
+	all := le.tree.InOrderTraversal()
+
+	switch query := q.(type) {
+	case TermQuery:
+		return le.KeywordSearch(query.Term)
+	case BooleanQuery:
+		// Process MUST queries (intersection)
+		var mustResults []map[K]KeyValuePair[K, V]
+		for _, sub := range query.Must {
+			subRes := le.MultiQuery(sub)
+			resMap := make(map[K]KeyValuePair[K, V])
+			for _, pair := range subRes {
+				resMap[pair.Key] = pair
+			}
+			mustResults = append(mustResults, resMap)
+		}
+		if len(mustResults) > 0 {
+			// Intersect all MUST results.
+			for k, pair := range mustResults[0] {
+				include := true
+				for i := 1; i < len(mustResults); i++ {
+					if _, ok := mustResults[i][k]; !ok {
+						include = false
+						break
+					}
+				}
+				if include {
+					resultSet[k] = pair
+				}
+			}
+		} else {
+			// If no MUST clause, start with all records.
+			for _, pair := range all {
+				resultSet[pair.Key] = pair
+			}
+		}
+		// Process MUST_NOT queries (exclusion)
+		for _, sub := range query.MustNot {
+			subRes := le.MultiQuery(sub)
+			for _, pair := range subRes {
+				delete(resultSet, pair.Key)
+			}
+		}
+		// Process SHOULD queries (union)
+		if len(query.Should) > 0 {
+			shouldSet := make(map[K]KeyValuePair[K, V])
+			for _, sub := range query.Should {
+				subRes := le.MultiQuery(sub)
+				for _, pair := range subRes {
+					shouldSet[pair.Key] = pair
+				}
+			}
+			// Merge union if resultSet is not already empty.
+			if len(resultSet) == 0 {
+				resultSet = shouldSet
+			} else {
+				for k, pair := range shouldSet {
+					resultSet[k] = pair
+				}
+			}
+		}
+	case KeyValueQuery:
+		// Scan all records and filter by the record's field value.
+		for _, pair := range all {
+			var fieldVal string
+			rVal := reflect.ValueOf(pair.Value)
+			switch rVal.Kind() {
+			case reflect.Map:
+				// assumes map with string keys
+				val := rVal.MapIndex(reflect.ValueOf(query.Field))
+				if val.IsValid() {
+					fieldVal = fmt.Sprintf("%v", val.Interface())
+				}
+			case reflect.Struct:
+				f := rVal.FieldByName(query.Field)
+				if f.IsValid() {
+					fieldVal = fmt.Sprintf("%v", f.Interface())
+				}
+			default:
+				// unsupported type, skip filtering.
+				continue
+			}
+			if query.Exact {
+				if fieldVal == query.Value {
+					resultSet[pair.Key] = pair
+				}
+			} else {
+				if strings.Contains(strings.ToLower(fieldVal), strings.ToLower(query.Value)) {
+					resultSet[pair.Key] = pair
+				}
+			}
+		}
+	}
+	var results []KeyValuePair[K, V]
+	for _, pair := range resultSet {
+		results = append(results, pair)
+	}
+	return results
+}
+
 type SnapshotPayload[K Ordered, V Record] struct {
 	Records       []KeyValuePair[K, V] `json:"records"`
 	InvertedIndex map[string][]K       `json:"inverted_index"`
@@ -988,4 +1110,59 @@ func main() {
 	for _, r := range leStruct.FuzzySearch("Alic", 1) {
 		fmt.Printf("Key: %v, Value: %+v\n", r.Key, r.Value)
 	}
+
+	// New block: generate 1 million []map[string]any records and apply searches/lookup.
+	leAny := NewLookupEngine[int, map[string]any](3, 1024, 3)
+	const recordsCount = 1000000
+	start := time.Now()
+	for i := 1; i <= recordsCount; i++ {
+		rec := map[string]any{
+			"Field1":  fmt.Sprintf("Record %d", i),
+			"Field2":  fmt.Sprintf("Data %d", i),
+			"Field3":  fmt.Sprintf("Value %d", i),
+			"Field4":  fmt.Sprintf("Info %d", i),
+			"Field5":  fmt.Sprintf("Detail %d", i),
+			"Field6":  fmt.Sprintf("Note %d", i),
+			"Field7":  fmt.Sprintf("Extra %d", i),
+			"Field8":  fmt.Sprintf("Meta %d", i),
+			"Field9":  fmt.Sprintf("Param %d", i),
+			"Field10": fmt.Sprintf("Item %d", i),
+		}
+		leAny.Insert(i, rec)
+	}
+	fmt.Printf("Inserted %d records in %v\n", recordsCount, time.Since(start))
+	fmt.Println("\nMap[string]any Records Keyword Search for 'record':")
+	results := leAny.KeywordSearch("record")
+	fmt.Printf("Found %d records matching 'record'\n", len(results))
+
+	fmt.Println("Fuzzy Search for 'Recor' (threshold 1):")
+	results = leAny.FuzzySearch("Recor", 1)
+	fmt.Printf("Found %d records matching fuzzy 'Recor'\n", len(results))
+
+	// === New Examples for MultiQuery ===
+	termQuery := TermQuery{Term: "autocomplete"}
+	fmt.Println("\nMultiQuery Example - TermQuery for 'autocomplete':")
+	for _, r := range leStr.MultiQuery(termQuery) {
+		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
+	}
+
+	boolQuery := BooleanQuery{
+		Must:    []any{TermQuery{Term: "map"}},
+		MustNot: []any{TermQuery{Term: "first"}},
+		Should:  []any{KeyValueQuery{Field: "title", Value: "Record"}},
+	}
+	start = time.Now()
+	fmt.Println("\nMultiQuery Example - BooleanQuery:")
+	for _, r := range leMap.MultiQuery(boolQuery) {
+		fmt.Printf("Key: %v, Value: %v\n", r.Key, r.Value)
+	}
+	fmt.Printf("BooleanQuery took %v\n", time.Since(start))
+	kvQuery := KeyValueQuery{Field: "Occupation", Value: "Engineer"}
+
+	start = time.Now()
+	fmt.Println("\nMultiQuery Example - KeyValueQuery:")
+	for _, r := range leStruct.MultiQuery(kvQuery) {
+		fmt.Printf("Key: %v, Value: %+v\n", r.Key, r.Value)
+	}
+	fmt.Printf("KeyValueQuery took %v\n", time.Since(start))
 }
