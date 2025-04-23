@@ -267,23 +267,41 @@ func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlus
 	for i := 0; i < len(leaves)-1; i++ {
 		leaves[i].next = leaves[i+1]
 	}
+	// Concurrency: build internal nodes in parallel.
 	nodes := leaves
 	for len(nodes) > 1 {
-		var parents []*bTreeNode[K, V]
-		parent := newNode[K, V](order, false)
-		// Build internal nodes: add key only for children after the first.
-		for _, node := range nodes {
-			if len(parent.children) == order {
+		var (
+			wg      sync.WaitGroup
+			mu      sync.Mutex
+			parents []*bTreeNode[K, V]
+		)
+		// Group nodes by 'order' (i.e. each parent gets up to 'order' children)
+		chunkSize := order
+		for i := 0; i < len(nodes); i += chunkSize {
+			end := i + chunkSize
+			if end > len(nodes) {
+				end = len(nodes)
+			}
+			chunk := nodes[i:end]
+			wg.Add(1)
+			go func(chunk []*bTreeNode[K, V]) {
+				defer wg.Done()
+				parent := newNode[K, V](order, false)
+				parent.children = chunk
+				if len(chunk) > 1 {
+					for _, child := range chunk[1:] {
+						// Only add a key if child has keys.
+						if len(child.keys) > 0 {
+							parent.keys = append(parent.keys, child.keys[0])
+						}
+					}
+				}
+				mu.Lock()
 				parents = append(parents, parent)
-				parent = newNode[K, V](order, false)
-			}
-			parent.children = append(parent.children, node)
-			// Modified: only append if node.keys is non-empty.
-			if len(parent.children) > 1 && len(node.keys) > 0 {
-				parent.keys = append(parent.keys, node.keys[0])
-			}
+				mu.Unlock()
+			}(chunk)
 		}
-		parents = append(parents, parent)
+		wg.Wait()
 		nodes = parents
 	}
 	tree.root = nodes[0]
