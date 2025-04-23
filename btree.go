@@ -248,26 +248,35 @@ func (tree *BPlusTree[K, V]) LowerBound(key K) []KeyValuePair[K, V] {
 
 func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlusTree[K, V] {
 	tree := &BPlusTree[K, V]{order: order}
-	// Added: handle empty input to avoid nil leaf access.
 	if len(pairs) == 0 {
 		tree.root = newNode[K, V](order, true)
 		return tree
 	}
-	var leaves []*bTreeNode[K, V]
-	leaf := newNode[K, V](order, true)
-	for _, pair := range pairs {
-		if len(leaf.keys) == order-1 {
-			leaves = append(leaves, leaf)
-			leaf = newNode[K, V](order, true)
+	leafCapacity := order - 1
+	numLeaves := (len(pairs) + leafCapacity - 1) / leafCapacity
+	leaves := make([]*bTreeNode[K, V], numLeaves)
+	var wg sync.WaitGroup
+	for i := 0; i < numLeaves; i++ {
+		start := i * leafCapacity
+		end := start + leafCapacity
+		if end > len(pairs) {
+			end = len(pairs)
 		}
-		leaf.keys = append(leaf.keys, pair.Key)
-		leaf.values = append(leaf.values, pair.Value)
+		wg.Add(1)
+		go func(i, start, end int) {
+			defer wg.Done()
+			leaf := newNode[K, V](order, true)
+			for j := start; j < end; j++ {
+				leaf.keys = append(leaf.keys, pairs[j].Key)
+				leaf.values = append(leaf.values, pairs[j].Value)
+			}
+			leaves[i] = leaf
+		}(i, start, end)
 	}
-	leaves = append(leaves, leaf)
+	wg.Wait()
 	for i := 0; i < len(leaves)-1; i++ {
 		leaves[i].next = leaves[i+1]
 	}
-	// Concurrency: build internal nodes in parallel.
 	nodes := leaves
 	for len(nodes) > 1 {
 		var (
@@ -275,7 +284,6 @@ func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlus
 			mu      sync.Mutex
 			parents []*bTreeNode[K, V]
 		)
-		// Group nodes by 'order' (i.e. each parent gets up to 'order' children)
 		chunkSize := order
 		for i := 0; i < len(nodes); i += chunkSize {
 			end := i + chunkSize
@@ -287,15 +295,14 @@ func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlus
 			go func(chunk []*bTreeNode[K, V]) {
 				defer wg.Done()
 				parent := newNode[K, V](order, false)
-				parent.children = chunk
 				if len(chunk) > 1 {
 					for _, child := range chunk[1:] {
-						// Only add a key if child has keys.
 						if len(child.keys) > 0 {
 							parent.keys = append(parent.keys, child.keys[0])
 						}
 					}
 				}
+				parent.children = chunk
 				mu.Lock()
 				parents = append(parents, parent)
 				mu.Unlock()
@@ -1077,25 +1084,19 @@ func (le *LookupEngine[K, V]) LoadInvertedIndex(path string) error {
 	return nil
 }
 
-// Modified: BulkInsert now processes records concurrently.
 func (le *LookupEngine[K, V]) BulkInsert(pairs []KeyValuePair[K, V]) {
-	le.mu.Lock()
-	defer le.mu.Unlock()
-	le.tree = BulkLoad(le.tree.order, pairs)
-	// Prepare new indexes concurrently.
+	newTree := BulkLoad(le.tree.order, pairs)
+	bfM, bfK := le.bf.m, le.bf.k
 	numWorkers := runtime.NumCPU()
 	chunkSize := (len(pairs) + numWorkers - 1) / numWorkers
-
 	type workerResult struct {
 		invIdx     map[string][]K
 		tokens     map[string]struct{}
-		bloomIncr  []uint8 // length = le.bf.m
+		bloomIncr  []uint8 // length = bfM
 		lastAccess map[K]time.Time
 	}
-
 	results := make([]workerResult, numWorkers)
 	var wg sync.WaitGroup
-
 	for i := 0; i < numWorkers; i++ {
 		startIdx := i * chunkSize
 		endIdx := startIdx + chunkSize
@@ -1108,14 +1109,13 @@ func (le *LookupEngine[K, V]) BulkInsert(pairs []KeyValuePair[K, V]) {
 			res := workerResult{
 				invIdx:     make(map[string][]K),
 				tokens:     make(map[string]struct{}),
-				bloomIncr:  make([]uint8, le.bf.m),
+				bloomIncr:  make([]uint8, bfM),
 				lastAccess: make(map[K]time.Time),
 			}
-			now := time.Now() // hoisted time.Now() for the entire worker
+			now := time.Now()
 			for j := start; j < end; j++ {
 				pair := pairs[j]
 				res.lastAccess[pair.Key] = now
-				// Use fast conversion if key is int
 				var keyBytes []byte
 				if v, ok := any(pair.Key).(int); ok {
 					keyBytes = []byte(strconv.Itoa(v))
@@ -1123,12 +1123,11 @@ func (le *LookupEngine[K, V]) BulkInsert(pairs []KeyValuePair[K, V]) {
 					keyBytes = []byte(fmt.Sprintf("%v", pair.Key))
 				}
 				h1, h2 := hashDouble(keyBytes)
-				for k := uint(0); k < le.bf.k; k++ {
-					idx := (h1 + uint(k)*h2) % le.bf.m
+				for k := uint(0); k < bfK; k++ {
+					idx := (h1 + uint(k)*h2) % bfM
 					res.bloomIncr[idx]++
 				}
-				toks := extractTokens(pair.Value)
-				for _, token := range toks {
+				for _, token := range extractTokens(pair.Value) {
 					res.invIdx[token] = append(res.invIdx[token], pair.Key)
 					res.tokens[token] = struct{}{}
 				}
@@ -1139,16 +1138,16 @@ func (le *LookupEngine[K, V]) BulkInsert(pairs []KeyValuePair[K, V]) {
 	wg.Wait()
 
 	// Merge worker results.
-	le.invertedIndex = make(map[string][]K)
-	le.lastAccess = make(map[K]time.Time)
-	newCounts := make([]uint8, le.bf.m)
+	newInvIdx := make(map[string][]K)
+	newLastAccess := make(map[K]time.Time)
+	newCounts := make([]uint8, bfM)
 	globalTokens := make(map[string]struct{})
 	for _, res := range results {
 		for k, v := range res.lastAccess {
-			le.lastAccess[k] = v
+			newLastAccess[k] = v
 		}
 		for token, keys := range res.invIdx {
-			le.invertedIndex[token] = append(le.invertedIndex[token], keys...)
+			newInvIdx[token] = append(newInvIdx[token], keys...)
 		}
 		for i, count := range res.bloomIncr {
 			newCounts[i] += count
@@ -1157,10 +1156,12 @@ func (le *LookupEngine[K, V]) BulkInsert(pairs []KeyValuePair[K, V]) {
 			globalTokens[token] = struct{}{}
 		}
 	}
-	le.bf = NewBloomFilter(le.bf.m, le.bf.k)
+	le.mu.Lock()
+	le.tree = newTree
+	le.invertedIndex = newInvIdx
+	le.lastAccess = newLastAccess
+	le.bf = NewBloomFilter(bfM, bfK)
 	le.bf.counts = newCounts
-
-	// Rebuild BKTree from the collected tokens.
 	le.tokens = globalTokens
 	le.bkTree = nil
 	for token := range globalTokens {
@@ -1170,6 +1171,7 @@ func (le *LookupEngine[K, V]) BulkInsert(pairs []KeyValuePair[K, V]) {
 			le.bkTree.Insert(token)
 		}
 	}
+	le.mu.Unlock()
 }
 
 type Person struct {
