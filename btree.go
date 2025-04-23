@@ -408,31 +408,48 @@ func (le *LookupEngine[K, V]) FuzzySearch(query string, threshold int) []KeyValu
 	return result
 }
 
-// Add a new Query type to represent search queries similar to ElasticSearch.
 type Query struct {
-	Keywords []string       // Exact keyword search terms.
-	Fuzzy    map[string]int // Fuzzy search terms with thresholds.
+	Keywords []string
+	Fuzzy    map[string]int
+	Page     int
+	Size     int
+	Sort     string
 }
 
-// Add a new Query method to LookupEngine to combine keyword and fuzzy search.
 func (le *LookupEngine[K, V]) Query(q Query) []KeyValuePair[K, V] {
 	resultMap := make(map[K]KeyValuePair[K, V])
-	// Process exact keyword searches.
 	for _, kw := range q.Keywords {
 		for _, pair := range le.KeywordSearch(strings.ToLower(kw)) {
 			resultMap[pair.Key] = pair
 		}
 	}
-	// Process fuzzy searches.
 	for term, threshold := range q.Fuzzy {
 		for _, pair := range le.FuzzySearch(strings.ToLower(term), threshold) {
 			resultMap[pair.Key] = pair
 		}
 	}
-	// Convert map to slice.
 	var results []KeyValuePair[K, V]
 	for _, pair := range resultMap {
 		results = append(results, pair)
+	}
+	if q.Sort != "" {
+		sort.Slice(results, func(i, j int) bool {
+			if q.Sort == "asc" {
+				return results[i].Key < results[j].Key
+			}
+			return results[i].Key > results[j].Key
+		})
+	}
+	if q.Page > 0 && q.Size > 0 {
+		start := (q.Page - 1) * q.Size
+		if start >= len(results) {
+			return []KeyValuePair[K, V]{}
+		}
+		end := start + q.Size
+		if end > len(results) {
+			end = len(results)
+		}
+		results = results[start:end]
 	}
 	return results
 }
@@ -461,7 +478,7 @@ func main() {
 	for _, rec := range leStr.FuzzySearch("autocomplet", 1) {
 		fmt.Printf("Key: %v, Value: %v\n", rec.Key, rec.Value)
 	}
-	// New combined query API test.
+
 	query := Query{
 		Keywords: []string{"autocomplete"},
 		Fuzzy:    map[string]int{"autocomplet": 1},
