@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime" // added
 	"sort"
 	"strings"
 	"sync"
@@ -245,6 +244,18 @@ func (tree *BPlusTree[K, V]) LowerBound(key K) []KeyValuePair[K, V] {
 	return result
 }
 
+// collectLeaves recursively collects all leaf nodes from the tree in sorted order.
+func collectLeaves[K Ordered, V Record](node *bTreeNode[K, V]) []*bTreeNode[K, V] {
+	if node.leaf {
+		return []*bTreeNode[K, V]{node}
+	}
+	var leaves []*bTreeNode[K, V]
+	for _, child := range node.children {
+		leaves = append(leaves, collectLeaves(child)...)
+	}
+	return leaves
+}
+
 func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlusTree[K, V] {
 	tree := &BPlusTree[K, V]{order: order}
 	if len(pairs) == 0 {
@@ -273,6 +284,7 @@ func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlus
 		}(i, start, end)
 	}
 	wg.Wait()
+	// Link the initially created leaves (this chain may later be broken when grouping into parents)
 	for i := 0; i < len(leaves)-1; i++ {
 		leaves[i].next = leaves[i+1]
 	}
@@ -294,6 +306,7 @@ func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlus
 			go func(chunk []*bTreeNode[K, V]) {
 				defer wg.Done()
 				parent := newNode[K, V](order, false)
+				// For non-leaf nodes, use the first key of each child (except the first)
 				if len(chunk) > 1 {
 					for _, child := range chunk[1:] {
 						if len(child.keys) > 0 {
@@ -311,6 +324,17 @@ func BulkLoad[K Ordered, V Record](order int, pairs []KeyValuePair[K, V]) *BPlus
 		nodes = parents
 	}
 	tree.root = nodes[0]
+
+	// **New step: Re-link all leaves in the final tree**
+	allLeaves := collectLeaves(tree.root)
+	for i := 0; i < len(allLeaves)-1; i++ {
+		allLeaves[i].next = allLeaves[i+1]
+	}
+	// Optionally, you can set the next pointer of the final leaf to nil.
+	if len(allLeaves) > 0 {
+		allLeaves[len(allLeaves)-1].next = nil
+	}
+
 	return tree
 }
 
@@ -1071,79 +1095,8 @@ func (le *LookupEngine[K, V]) LoadInvertedIndex(path string) error {
 	return nil
 }
 
-func (le *LookupEngine[K, V]) BulkInsert(pairs []KeyValuePair[K, V]) {
-	// Preallocate and build new tree and indices
-	newTree := BulkLoad(le.tree.order, pairs)
-	bfM, bfK := le.bf.m, le.bf.k
-	// Preallocate global structures
-	newInvIdx := make(map[string][]K, len(pairs)*2)
-	newCounts := make([]uint8, bfM)
-	newLastAccess := make(map[K]time.Time, len(pairs))
-	// Determine chunk size for balanced work
-	numWorkers := runtime.NumCPU()
-	chunkSize := 10000
-	type workerResult struct {
-		invIdx     map[string][]K
-		tokens     []string
-		bloomIncr  []uint8
-		lastAccess map[K]time.Time
-	}
-	results := make([]workerResult, numWorkers)
-	var wg sync.WaitGroup
-	now := time.Now()
-	for w := 0; w < numWorkers; w++ {
-		start := w * chunkSize
-		end := start + chunkSize
-		if end > len(pairs) {
-			end = len(pairs)
-		}
-		wg.Add(1)
-		go func(idx, s, e int) {
-			defer wg.Done()
-			inv := make(map[string][]K)
-			bloom := make([]uint8, bfM)
-			last := make(map[K]time.Time)
-			for i := s; i < e; i++ {
-				pair := pairs[i]
-				last[pair.Key] = now
-				keyBytes := []byte(fmt.Sprintf("%v", pair.Key))
-				h1, h2 := hashDouble(keyBytes)
-				for j := uint(0); j < bfK; j++ {
-					bloom[(h1+j*h2)%bfM]++
-				}
-				for token, _ := range any(pair.Value).(map[string]any) {
-					inv[token] = append(inv[token], pair.Key)
-				}
-			}
-			results[idx] = workerResult{invIdx: inv, bloomIncr: bloom, lastAccess: last}
-		}(w, start, end)
-	}
-	wg.Wait()
-	for _, res := range results {
-		for k, t := range res.lastAccess {
-			newLastAccess[k] = t
-		}
-		for i, c := range res.bloomIncr {
-			newCounts[i] += c
-		}
-		for token, keys := range res.invIdx {
-			slice := newInvIdx[token]
-			slice = append(slice, keys...)
-			newInvIdx[token] = slice
-		}
-	}
-	le.mu.Lock()
-	defer le.mu.Unlock()
-	le.tree = newTree
-	le.bf.counts = newCounts
-	le.invertedIndex = newInvIdx
-	le.lastAccess = newLastAccess
-	le.bkTree = NewBKTree("")
-	for token := range newInvIdx {
-		le.bkTree.Insert(token)
-	}
-	le.tokens = make(map[string]struct{}, len(newInvIdx))
-	for token := range newInvIdx {
-		le.tokens[token] = struct{}{}
-	}
+func (le *LookupEngine[K, V]) TotalRecords() int {
+	le.mu.RLock()
+	defer le.mu.RUnlock()
+	return len(le.tree.InOrderTraversal())
 }
