@@ -1,93 +1,77 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"runtime"
+	"log"
 	"time"
 
-	"github.com/oarkflow/lookup"
+	"github.com/oarkflow/filters"
+	"github.com/oarkflow/json"
+
+	v1 "github.com/oarkflow/lookup"
 )
 
-func formatBytes(bytes uint64) string {
-	const (
-		KB = 1 << 10
-		MB = 1 << 20
-		GB = 1 << 30
-		TB = 1 << 40
-	)
-
-	switch {
-	case bytes >= TB:
-		return fmt.Sprintf("%.2f TB", float64(bytes)/TB)
-	case bytes >= GB:
-		return fmt.Sprintf("%.2f GB", float64(bytes)/GB)
-	case bytes >= MB:
-		return fmt.Sprintf("%.2f MB", float64(bytes)/MB)
-	case bytes >= KB:
-		return fmt.Sprintf("%.2f KB", float64(bytes)/KB)
-	default:
-		return fmt.Sprintf("%d B", bytes)
-	}
-}
-
-func monitorResources(fn func()) {
-	// Force garbage collection to get more accurate baseline
-	runtime.GC()
-
-	var memStatsBefore, memStatsAfter runtime.MemStats
-	runtime.ReadMemStats(&memStatsBefore)
-
-	start := time.Now()
-	fn()
-	elapsed := time.Since(start)
-
-	runtime.ReadMemStats(&memStatsAfter)
-
-	before := formatBytes(memStatsBefore.Alloc)
-	after := formatBytes(memStatsAfter.Alloc)
-	fmt.Printf("\nFunction resource usage:\n")
-	fmt.Printf("Memory before: %s\n", before)
-	fmt.Printf("Memory after : %s\n", after)
-	fmt.Printf("Total memory used: %s\n", formatBytes(memStatsAfter.Alloc-memStatsBefore.Alloc))
-	fmt.Printf("Execution time: %v\n", elapsed)
-}
-
-type Person struct {
-	Name       string
-	Occupation string
-	Email      string
-}
-
 func main() {
+	manager := v1.NewManager()
+	manager.StartHTTP(":8080")
+}
 
-	// New block: generate 1 million []map[string]any records and apply searches/lookup.
-	leAny := lookup.NewLookupEngine[int, map[string]any](3, 1024, 3)
-	const recordsCount = 1000000
+func mai1n() {
+	// Initialize and build the index
+	ctx := context.Background()
+	index := v1.NewIndex("test-filter")
+	jsonFile := "charge_master.json"
 	start := time.Now()
-	for i := 1; i <= recordsCount; i++ {
-		rec := map[string]any{
-			"Field1":  fmt.Sprintf("Record %d", i),
-			"Field2":  fmt.Sprintf("Data %d", i),
-			"Field3":  fmt.Sprintf("Value %d", i),
-			"Field4":  fmt.Sprintf("Info %d", i),
-			"Field5":  fmt.Sprintf("Detail %d", i),
-			"Field6":  fmt.Sprintf("Note %d", i),
-			"Field7":  fmt.Sprintf("Extra %d", i),
-			"Field8":  fmt.Sprintf("Meta %d", i),
-			"Field9":  fmt.Sprintf("Param %d", i),
-			"Field10": fmt.Sprintf("Item %d", i),
-		}
-		pair := lookup.KeyValuePair[int, map[string]any]{Key: i, Value: rec}
-		leAny.Insert(pair.Key, pair.Value)
+	err := index.Build(ctx, jsonFile)
+	if err != nil {
+		log.Fatalf("Index build error: %v", err)
 	}
-	fmt.Println(leAny.TotalRecords())
-	fmt.Printf("Inserted %d records in %v\n", recordsCount, time.Since(start))
-	fmt.Println("\nMap[string]any Records Keyword Search for 'record':")
-	results := leAny.KeywordSearch("record")
-	fmt.Printf("Found %d records matching 'record'\n", len(results))
+	fmt.Printf("Built index for %d docs in %s\n", index.TotalDocs, time.Since(start))
 
-	fmt.Println("Fuzzy Search for 'Recor' (threshold 1):")
-	results = leAny.FuzzySearch("Recor", 1)
-	fmt.Printf("Found %d records matching fuzzy 'Recor'\n", len(results))
+	// 1) TermQuery example (fuzzy)
+	// termQ := v1.NewTermQuery("9560012", true, 1)
 
+	// 2) Define Filters: e.g., charge_amount >= 100 AND charge_type = "service"
+	conditions := []filters.Condition{
+		&filters.Filter{Field: "charge_amt", Operator: filters.GreaterThanEqual, Value: 100},
+		&filters.Filter{Field: "charge_type", Operator: filters.Equal, Value: "ED_FACILITY"},
+	}
+
+	// 3) Combine into a FilterQuery
+	fq := v1.NewFilterQuery(nil, filters.AND, false, conditions...)
+
+	// 4) SearchParams (with sorting and pagination)
+	params := v1.SearchParams{
+		Page:    1,
+		PerPage: 1,
+		SortFields: []v1.SortField{{
+			Field: "charge_type",
+		}},
+	}
+
+	searchStart := time.Now()
+	page, err := index.Search(ctx, fq, params)
+	if err != nil {
+		log.Fatalf("Search error: %v", err)
+	}
+	fmt.Printf("Found %d docs (page %d/%d) in %s\n", page.Total, page.Page, page.TotalPages, time.Since(searchStart))
+	for _, sd := range page.Results {
+		rec, _ := index.GetDocument(sd.DocID)
+		bt, _ := json.Marshal(rec)
+		fmt.Printf("DocID:%d Score:%.4f Data:%s\n", sd.DocID, sd.Score, string(bt))
+	}
+
+	searchStart = time.Now()
+	page, err = index.Search(ctx, fq, params)
+	if err != nil {
+		log.Fatalf("Search error: %v", err)
+	}
+	fmt.Printf("Found %d docs (page %d/%d) in %s\n", page.Total, page.Page, page.TotalPages, time.Since(searchStart))
+	for _, sd := range page.Results {
+		rec, _ := index.GetDocument(sd.DocID)
+		fmt.Println(rec)
+		bt, _ := json.Marshal(rec)
+		fmt.Printf("DocID:%d Score:%.4f Data:%s\n", sd.DocID, sd.Score, string(bt))
+	}
 }
