@@ -495,7 +495,7 @@ type SearchParams struct {
 	Fields     []string
 }
 
-func generateCacheKey(q Query, sp SearchParams) (string, error) {
+func generateCacheKey(q Query, sp any) (string, error) {
 	tokens := q.Tokens()
 	var queryStr string
 	if len(tokens) > 0 {
@@ -504,8 +504,8 @@ func generateCacheKey(q Query, sp SearchParams) (string, error) {
 		queryStr = fmt.Sprintf("%T:%v", q, q)
 	}
 	composite := struct {
-		Query  string       `json:"query"`
-		Search SearchParams `json:"search"`
+		Query  string `json:"query"`
+		Search any    `json:"search"`
 	}{
 		Query:  queryStr,
 		Search: sp,
@@ -523,7 +523,8 @@ func (index *Index) Search(ctx context.Context, q Query, paramList ...SearchPara
 	if len(paramList) > 0 {
 		params = paramList[0]
 	}
-	key, err := generateCacheKey(q, params)
+	req := ctx.Value("__request")
+	key, err := generateCacheKey(q, req)
 	if err != nil {
 		return Page{}, err
 	}

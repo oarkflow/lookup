@@ -91,16 +91,12 @@ func (m *Manager) Search(ctx context.Context, name string, req Request) (*Result
 		Fields:     req.Fields,
 		SortFields: []SortField{sort},
 	}
-	var conditions []filters.Condition
-	for _, cond := range req.Filters {
-		conditions = append(conditions, cond)
-	}
-	if len(conditions) == 0 && req.Query == "" {
+	if len(req.Filters) == 0 && req.Query == "" {
 		return nil, fmt.Errorf("no filters or query provided")
 	}
 	var query Query
-	if len(conditions) > 0 {
-		query = NewFilterQuery(nil, filters.Boolean(req.Match), req.Reverse, conditions...)
+	if len(req.Filters) > 0 {
+		query = NewFilterQuery(nil, filters.Boolean(req.Match), req.Reverse, req.Filters...)
 	}
 	if req.Query != "" {
 		termQuery := NewTermQuery(req.Query, true, 1)
@@ -115,6 +111,7 @@ func (m *Manager) Search(ctx context.Context, name string, req Request) (*Result
 			query = termQuery
 		}
 	}
+	ctx = context.WithValue(ctx, "__request", req)
 	results, err := index.Search(ctx, query, params)
 	if err != nil {
 		return nil, err
@@ -151,17 +148,17 @@ type NewIndexRequest struct {
 }
 
 type Request struct {
-	Filters   []*filters.Filter `json:"filters"`
-	Query     string            `json:"q" query:"q"`
-	Condition string            `json:"condition" query:"condition"`
-	Match     string            `json:"m" query:"m"`
-	Fields    []string          `json:"f" query:"f"`
-	Offset    int               `json:"o" query:"o"`
-	Size      int               `json:"s" query:"s"`
-	SortField string            `json:"sort_field" query:"sort_field"`
-	SortOrder string            `json:"sort_order" query:"sort_order"`
-	Page      int               `json:"p" query:"p"`
-	Reverse   bool              `json:"reverse" query:"reverse"`
+	Filters   []filters.Condition `json:"filters"`
+	Query     string              `json:"q" query:"q"`
+	Condition string              `json:"condition"`
+	Match     string              `json:"m" query:"m"`
+	Fields    []string            `json:"f" query:"f"`
+	Offset    int                 `json:"o" query:"o"`
+	Size      int                 `json:"s" query:"s"`
+	SortField string              `json:"sort_field" query:"sort_field"`
+	SortOrder string              `json:"sort_order" query:"sort_order"`
+	Page      int                 `json:"p" query:"p"`
+	Reverse   bool                `json:"reverse" query:"reverse"`
 }
 
 var builtInFields = []string{"q", "m", "l", "f", "t", "o", "s", "e", "p", "condition", "sort_field", "sort_order"}
@@ -184,11 +181,15 @@ func prepareQuery(r *http.Request) (Request, error) {
 			return query, fmt.Errorf("error unmarshalling extra: %v", err)
 		}
 	}
+	query.Match = "AND"
+	if strings.ToLower(query.Match) == "any" {
+		query.Match = "OR"
+	}
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q != "" {
 		query.Query = q
 	}
-	var extra []*filters.Filter
+	var extra []filters.Condition
 	for k, v := range extraMap {
 		if slices.Contains(builtInFields, k) {
 			continue
@@ -202,17 +203,26 @@ func prepareQuery(r *http.Request) (Request, error) {
 	}
 	if len(extra) == 0 {
 		rawQuery := r.URL.RawQuery
-		extra, err = filters.ParseQuery(rawQuery, builtInFields...)
+		extraFilters, err := filters.ParseQuery(rawQuery, builtInFields...)
 		if err != nil {
 			return query, err
+		}
+		for _, v := range extraFilters {
+			extra = append(extra, v)
 		}
 	}
 	if extra != nil && query.Filters == nil {
 		query.Filters = extra
 	}
-	query.Match = "AND"
-	if strings.ToLower(query.Match) == "any" {
-		query.Match = "OR"
+	condition := strings.TrimSpace(strings.ToLower(query.Condition))
+	if condition != "" {
+		rule, err := filters.ParseSQL(condition)
+		if err != nil {
+			return query, fmt.Errorf("error parsing condition: %v", err)
+		}
+		if rule != nil {
+			query.Filters = append(query.Filters, rule)
+		}
 	}
 	return query, nil
 }
