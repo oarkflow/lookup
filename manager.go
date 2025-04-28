@@ -9,9 +9,12 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cespare/xxhash/v2"
 
 	"github.com/oarkflow/filters"
 	"github.com/oarkflow/json"
@@ -96,10 +99,20 @@ func (m *Manager) Search(ctx context.Context, name string, req Request) (*Result
 	}
 	var query Query
 	if len(req.Filters) > 0 {
-		query = NewFilterQuery(nil, filters.Boolean(req.Match), req.Reverse, req.Filters...)
+		var fil []filters.Condition
+		for _, f := range req.Filters {
+			fil = append(fil, &filters.Filter{
+				Field:    f.Field,
+				Operator: f.Operator,
+				Value:    f.Value,
+				Reverse:  f.Reverse,
+				Lookup:   f.Lookup,
+			})
+		}
+		query = NewFilterQuery(nil, filters.Boolean(req.Match), req.Reverse, fil...)
 	}
 	if req.Query != "" {
-		termQuery := NewTermQuery(req.Query, true, 1)
+		termQuery := NewTermQuery(req.Query, req.Exact, 1)
 		switch qry := query.(type) {
 		case *FilterQuery:
 			qry.Term = termQuery
@@ -147,21 +160,77 @@ type NewIndexRequest struct {
 	ID string `json:"id"`
 }
 
-type Request struct {
-	Filters   []filters.Condition `json:"filters"`
-	Query     string              `json:"q" query:"q"`
-	Condition string              `json:"condition"`
-	Match     string              `json:"m" query:"m"`
-	Fields    []string            `json:"f" query:"f"`
-	Offset    int                 `json:"o" query:"o"`
-	Size      int                 `json:"s" query:"s"`
-	SortField string              `json:"sort_field" query:"sort_field"`
-	SortOrder string              `json:"sort_order" query:"sort_order"`
-	Page      int                 `json:"p" query:"p"`
-	Reverse   bool                `json:"reverse" query:"reverse"`
+type Filter struct {
+	Field    string           `json:"field"`
+	Operator filters.Operator `json:"operator"`
+	Value    any              `json:"value"`
+	Reverse  bool             `json:"reverse"`
+	Lookup   *filters.Lookup  `json:"lookup"`
 }
 
-var builtInFields = []string{"q", "m", "l", "f", "t", "o", "s", "e", "p", "condition", "sort_field", "sort_order"}
+type Request struct {
+	Filters   []Filter      `json:"filters"`
+	Rule      *filters.Rule `json:"rule"`
+	Query     string        `json:"q" query:"q"`
+	Condition string        `json:"condition"`
+	Match     string        `json:"m" query:"m"`
+	Fields    []string      `json:"f" query:"f"`
+	Offset    int           `json:"o" query:"o"`
+	Size      int           `json:"s" query:"s"`
+	SortField string        `json:"sort_field" query:"sort_field"`
+	SortOrder string        `json:"sort_order" query:"sort_order"`
+	Page      int           `json:"p" query:"p"`
+	Reverse   bool          `json:"reverse" query:"reverse"`
+	Exact     bool          `json:"exact" query:"exact"`
+}
+
+func (r Request) Checksum() (uint64, error) {
+	tmp := r
+	sort.Strings(tmp.Fields)
+	condStrs := make([]string, len(tmp.Filters))
+	for i, c := range tmp.Filters {
+		b, err := json.Marshal(c)
+		if err != nil {
+			return 0, fmt.Errorf("marshaling filter condition: %w", err)
+		}
+		condStrs[i] = string(b)
+	}
+	sort.Strings(condStrs)
+	canon := struct {
+		Filters   []string `json:"filters"`
+		Query     string   `json:"q"`
+		Condition string   `json:"condition"`
+		Match     string   `json:"m"`
+		Fields    []string `json:"f"`
+		Offset    int      `json:"o"`
+		Size      int      `json:"s"`
+		SortField string   `json:"sort_field"`
+		SortOrder string   `json:"sort_order"`
+		Page      int      `json:"p"`
+		Reverse   bool     `json:"reverse"`
+		Exact     bool     `json:"exact"`
+	}{
+		Filters:   condStrs,
+		Query:     tmp.Query,
+		Condition: tmp.Condition,
+		Match:     tmp.Match,
+		Fields:    tmp.Fields,
+		Offset:    tmp.Offset,
+		Size:      tmp.Size,
+		SortField: tmp.SortField,
+		SortOrder: tmp.SortOrder,
+		Page:      tmp.Page,
+		Reverse:   tmp.Reverse,
+		Exact:     tmp.Exact,
+	}
+	payload, err := json.Marshal(canon)
+	if err != nil {
+		return 0, fmt.Errorf("marshaling canonical request: %w", err)
+	}
+	return xxhash.Sum64(payload), nil
+}
+
+var builtInFields = []string{"q", "m", "l", "f", "t", "o", "s", "exact", "p", "condition", "sort_field", "sort_order"}
 
 func prepareQuery(r *http.Request) (Request, error) {
 	var query Request
@@ -189,7 +258,7 @@ func prepareQuery(r *http.Request) (Request, error) {
 	if q != "" {
 		query.Query = q
 	}
-	var extra []filters.Condition
+	var extra []Filter
 	for k, v := range extraMap {
 		if slices.Contains(builtInFields, k) {
 			continue
@@ -199,7 +268,11 @@ func prepareQuery(r *http.Request) (Request, error) {
 		if vt == reflect.Slice {
 			operator = filters.In
 		}
-		extra = append(extra, filters.NewFilter(k, operator, v))
+		extra = append(extra, Filter{
+			Field:    k,
+			Operator: operator,
+			Value:    v,
+		})
 	}
 	if len(extra) == 0 {
 		rawQuery := r.URL.RawQuery
@@ -208,7 +281,13 @@ func prepareQuery(r *http.Request) (Request, error) {
 			return query, err
 		}
 		for _, v := range extraFilters {
-			extra = append(extra, v)
+			extra = append(extra, Filter{
+				Field:    v.Field,
+				Operator: v.Operator,
+				Value:    v.Value,
+				Reverse:  v.Reverse,
+				Lookup:   v.Lookup,
+			})
 		}
 	}
 	if extra != nil && query.Filters == nil {
@@ -221,7 +300,7 @@ func prepareQuery(r *http.Request) (Request, error) {
 			return query, fmt.Errorf("error parsing condition: %v", err)
 		}
 		if rule != nil {
-			query.Filters = append(query.Filters, rule)
+			query.Rule = rule
 		}
 	}
 	return query, nil

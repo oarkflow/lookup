@@ -3,7 +3,6 @@ package lookup
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -495,39 +494,17 @@ type SearchParams struct {
 	Fields     []string
 }
 
-func generateCacheKey(q Query, sp any) (string, error) {
-	tokens := q.Tokens()
-	var queryStr string
-	if len(tokens) > 0 {
-		queryStr = strings.Join(tokens, " ")
-	} else {
-		queryStr = fmt.Sprintf("%T:%v", q, q)
-	}
-	composite := struct {
-		Query  string `json:"query"`
-		Search any    `json:"search"`
-	}{
-		Query:  queryStr,
-		Search: sp,
-	}
-	data, err := json.Marshal(composite)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal composite key: %w", err)
-	}
-	hash := sha256.Sum256(data)
-	return fmt.Sprintf("%x", hash), nil
-}
-
 func (index *Index) Search(ctx context.Context, q Query, paramList ...SearchParams) (Page, error) {
 	var params SearchParams
 	if len(paramList) > 0 {
 		params = paramList[0]
 	}
-	req := ctx.Value("__request")
-	key, err := generateCacheKey(q, req)
+	req := ctx.Value("__request").(Request)
+	intKey, err := req.Checksum()
 	if err != nil {
 		return Page{}, err
 	}
+	key := fmt.Sprint(intKey)
 	queryTokens := q.Tokens()
 	page := params.Page
 	perPage := params.PerPage
