@@ -24,6 +24,8 @@ import (
 	"github.com/oarkflow/lookup/utils"
 )
 
+var DefaultPath = "lookup"
+
 type GenericRecord map[string]any
 
 func (rec GenericRecord) String() string {
@@ -140,9 +142,8 @@ func WithCacheExpiry(dur time.Duration) Options {
 }
 
 func NewIndex(id string, opts ...Options) *Index {
-	baseDir := "data"
-	os.MkdirAll(baseDir, 0755)
-	storagePath := filepath.Join(baseDir, "storage-"+id+".dat")
+	os.MkdirAll(DefaultPath, 0755)
+	storagePath := filepath.Join(DefaultPath, "storage-"+id+".dat")
 	index := &Index{
 		ID:            id,
 		numWorkers:    runtime.NumCPU(),
