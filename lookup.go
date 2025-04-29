@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-reflect"
+	"github.com/oarkflow/filters"
 	"github.com/oarkflow/json"
 	"github.com/oarkflow/xid"
 
@@ -494,18 +495,62 @@ type SearchParams struct {
 	Fields     []string
 }
 
-func (index *Index) Search(ctx context.Context, q Query, paramList ...SearchParams) (Page, error) {
-	var params SearchParams
-	if len(paramList) > 0 {
-		params = paramList[0]
+func (index *Index) Search(ctx context.Context, req Request) (Page, error) {
+	req.Match = "AND"
+	if strings.ToLower(req.Match) == "any" {
+		req.Match = "OR"
 	}
-	req := ctx.Value("__request").(Request)
+	sortField := SortField{Field: req.SortField}
+	if strings.ToLower(req.SortOrder) == "desc" {
+		sortField.Descending = true
+	}
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.Size <= 0 {
+		req.Size = 10
+	}
+	params := SearchParams{
+		Page:       req.Page,
+		PerPage:    req.Size,
+		SortFields: []SortField{sortField},
+	}
+	if len(req.Filters) == 0 && req.Query == "" {
+		return Page{}, fmt.Errorf("no filters or query provided")
+	}
+	var query Query
+	if len(req.Filters) > 0 {
+		var fil []filters.Condition
+		for _, f := range req.Filters {
+			fil = append(fil, &filters.Filter{
+				Field:    f.Field,
+				Operator: f.Operator,
+				Value:    f.Value,
+				Reverse:  f.Reverse,
+				Lookup:   f.Lookup,
+			})
+		}
+		query = NewFilterQuery(nil, filters.Boolean(req.Match), req.Reverse, fil...)
+	}
+	if req.Query != "" {
+		termQuery := NewTermQuery(req.Query, req.Exact, 1)
+		switch qry := query.(type) {
+		case *FilterQuery:
+			qry.Term = termQuery
+			query = qry
+		case FilterQuery:
+			qry.Term = termQuery
+			query = qry
+		case nil:
+			query = termQuery
+		}
+	}
 	intKey, err := req.Checksum()
 	if err != nil {
 		return Page{}, err
 	}
 	key := fmt.Sprint(intKey)
-	queryTokens := q.Tokens()
+	queryTokens := query.Tokens()
 	page := params.Page
 	perPage := params.PerPage
 	index.RLock()
@@ -542,7 +587,7 @@ func (index *Index) Search(ctx context.Context, q Query, paramList ...SearchPara
 		wg     sync.WaitGroup
 		mu     sync.Mutex
 	)
-	docIDs := q.Evaluate(index)
+	docIDs := query.Evaluate(index)
 	ch := make(chan int64, len(docIDs))
 	for _, id := range docIDs {
 		ch <- id

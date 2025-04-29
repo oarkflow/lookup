@@ -78,54 +78,8 @@ func (m *Manager) Search(ctx context.Context, name string, req Request) (*Result
 		fmt.Printf("index %s not found\n", name)
 		return nil, fmt.Errorf("index %s not found", name)
 	}
-	sort := SortField{Field: req.SortField}
-	if strings.ToLower(req.SortOrder) == "desc" {
-		sort.Descending = true
-	}
-	if req.Page <= 0 {
-		req.Page = 1
-	}
-	if req.Size <= 0 {
-		req.Size = 10
-	}
-	params := SearchParams{
-		Page:       req.Page,
-		PerPage:    req.Size,
-		Fields:     req.Fields,
-		SortFields: []SortField{sort},
-	}
-	if len(req.Filters) == 0 && req.Query == "" {
-		return nil, fmt.Errorf("no filters or query provided")
-	}
-	var query Query
-	if len(req.Filters) > 0 {
-		var fil []filters.Condition
-		for _, f := range req.Filters {
-			fil = append(fil, &filters.Filter{
-				Field:    f.Field,
-				Operator: f.Operator,
-				Value:    f.Value,
-				Reverse:  f.Reverse,
-				Lookup:   f.Lookup,
-			})
-		}
-		query = NewFilterQuery(nil, filters.Boolean(req.Match), req.Reverse, fil...)
-	}
-	if req.Query != "" {
-		termQuery := NewTermQuery(req.Query, req.Exact, 1)
-		switch qry := query.(type) {
-		case *FilterQuery:
-			qry.Term = termQuery
-			query = qry
-		case FilterQuery:
-			qry.Term = termQuery
-			query = qry
-		case nil:
-			query = termQuery
-		}
-	}
-	ctx = context.WithValue(ctx, "__request", req)
-	results, err := index.Search(ctx, query, params)
+
+	results, err := index.Search(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -134,14 +88,9 @@ func (m *Manager) Search(ctx context.Context, name string, req Request) (*Result
 		rec, ok := index.GetDocument(sd.DocID)
 		if ok {
 			record, ok := rec.(GenericRecord)
-			if len(params.Fields) > 0 {
-				if ok {
-					for _, field := range params.Fields {
-						delete(record, field)
-					}
-				}
+			if ok {
+				data = append(data, record)
 			}
-			data = append(data, record)
 		}
 	}
 	pagedData := &Result{
@@ -174,7 +123,6 @@ type Request struct {
 	Query     string        `json:"q" query:"q"`
 	Condition string        `json:"condition"`
 	Match     string        `json:"m" query:"m"`
-	Fields    []string      `json:"f" query:"f"`
 	Offset    int           `json:"o" query:"o"`
 	Size      int           `json:"s" query:"s"`
 	SortField string        `json:"sort_field" query:"sort_field"`
@@ -186,7 +134,6 @@ type Request struct {
 
 func (r Request) Checksum() (uint64, error) {
 	tmp := r
-	sort.Strings(tmp.Fields)
 	condStrs := make([]string, len(tmp.Filters))
 	for i, c := range tmp.Filters {
 		b, err := json.Marshal(c)
@@ -201,7 +148,6 @@ func (r Request) Checksum() (uint64, error) {
 		Query     string   `json:"q"`
 		Condition string   `json:"condition"`
 		Match     string   `json:"m"`
-		Fields    []string `json:"f"`
 		Offset    int      `json:"o"`
 		Size      int      `json:"s"`
 		SortField string   `json:"sort_field"`
@@ -214,7 +160,6 @@ func (r Request) Checksum() (uint64, error) {
 		Query:     tmp.Query,
 		Condition: tmp.Condition,
 		Match:     tmp.Match,
-		Fields:    tmp.Fields,
 		Offset:    tmp.Offset,
 		Size:      tmp.Size,
 		SortField: tmp.SortField,
@@ -249,10 +194,6 @@ func prepareQuery(r *http.Request) (Request, error) {
 		if err != nil {
 			return query, fmt.Errorf("error unmarshalling extra: %v", err)
 		}
-	}
-	query.Match = "AND"
-	if strings.ToLower(query.Match) == "any" {
-		query.Match = "OR"
 	}
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q != "" {

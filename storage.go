@@ -7,15 +7,20 @@ import (
 	"log"
 	"os"
 	"sort"
+	"sync"
 	"syscall"
 
 	"github.com/oarkflow/xid"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/oarkflow/lookup/utils"
 )
 
 type Ordered interface {
-	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~float32 | ~float64 | ~string
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
+		~float32 | ~float64 | ~string
 }
 
 type node[K Ordered, V any] struct {
@@ -27,10 +32,16 @@ type node[K Ordered, V any] struct {
 	next     *node[K, V]
 }
 
+type KVPair[K Ordered, V any] struct {
+	Key   K
+	Value V
+}
+
 type LRUCache[K comparable, V any] struct {
 	capacity int
 	cache    map[K]*list.Element
 	ll       *list.List
+	mu       sync.Mutex
 }
 
 type entry[K comparable, V any] struct {
@@ -47,6 +58,8 @@ func NewLRUCache[K comparable, V any](capacity int) *LRUCache[K, V] {
 }
 
 func (l *LRUCache[K, V]) Get(key K) (V, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if ele, ok := l.cache[key]; ok {
 		l.ll.MoveToFront(ele)
 		log.Printf("LRUCache: Accessed key %v", key)
@@ -57,6 +70,8 @@ func (l *LRUCache[K, V]) Get(key K) (V, bool) {
 }
 
 func (l *LRUCache[K, V]) Put(key K, value V) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if ele, ok := l.cache[key]; ok {
 		l.ll.MoveToFront(ele)
 		ele.Value = entry[K, V]{key, value}
@@ -65,15 +80,23 @@ func (l *LRUCache[K, V]) Put(key K, value V) {
 	ele := l.ll.PushFront(entry[K, V]{key, value})
 	l.cache[key] = ele
 	if l.ll.Len() > l.capacity {
-		l.RemoveOldest()
+		l.removeOldestLocked()
 	}
 }
 
-func (l *LRUCache[K, V]) RemoveOldest() {
+func (l *LRUCache[K, V]) Remove(key K) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if ele, ok := l.cache[key]; ok {
+		delete(l.cache, key)
+		l.ll.Remove(ele)
+	}
+}
+
+func (l *LRUCache[K, V]) removeOldestLocked() {
 	ele := l.ll.Back()
 	if ele != nil {
 		en := ele.Value.(entry[K, V])
-
 		delete(l.cache, en.key)
 		l.ll.Remove(ele)
 	}
@@ -84,13 +107,12 @@ func initStorage(filePath string, size int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
 	if err := f.Truncate(int64(size)); err != nil {
-		f.Close()
 		return nil, err
 	}
 	data, err := syscall.Mmap(int(f.Fd()), 0, size, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
-		f.Close()
 		return nil, err
 	}
 	return data, nil
@@ -102,6 +124,7 @@ type BPTree[K Ordered, V any] struct {
 	nextNodeID int
 	cache      *LRUCache[int, *node[K, V]]
 	storage    []byte
+	mu         sync.RWMutex
 }
 
 func NewBPTree[K Ordered, V any](order int, storageFile string, cacheCapacity int) *BPTree[K, V] {
@@ -131,6 +154,8 @@ func (t *BPTree[K, V]) cacheNode(n *node[K, V]) {
 }
 
 func (t *BPTree[K, V]) Search(key K) (V, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	n := t.root
 	for !n.isLeaf {
 		i := sort.Search(len(n.keys), func(i int) bool { return key < n.keys[i] })
@@ -145,6 +170,8 @@ func (t *BPTree[K, V]) Search(key K) (V, bool) {
 }
 
 func (t *BPTree[K, V]) Insert(key K, value V) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	const maxDepth = 64
 	type pathEntry struct {
 		n   *node[K, V]
@@ -166,6 +193,7 @@ func (t *BPTree[K, V]) Insert(key K, value V) {
 		t.cacheNode(cur)
 		return
 	}
+
 	cur.keys = cur.keys[:len(cur.keys)+1]
 	cur.values = cur.values[:len(cur.values)+1]
 	copy(cur.keys[i+1:], cur.keys[i:len(cur.keys)-1])
@@ -197,6 +225,7 @@ func (t *BPTree[K, V]) Insert(key K, value V) {
 		newChild, splitKey = t.splitInternal(parent)
 		t.cacheNode(newChild)
 	}
+
 	newRoot := &node[K, V]{
 		id:       t.nextNodeID,
 		isLeaf:   false,
@@ -247,6 +276,8 @@ func (t *BPTree[K, V]) splitInternal(n *node[K, V]) (newNode *node[K, V], promot
 }
 
 func (t *BPTree[K, V]) Delete(key K) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	deleted := t.delete(nil, t.root, key, 0)
 	if !t.root.isLeaf && len(t.root.keys) == 0 {
 		t.root = t.root.children[0]
@@ -354,6 +385,8 @@ func (t *BPTree[K, V]) rebalance(parent, child *node[K, V], idx int) {
 }
 
 func (t *BPTree[K, V]) ForEach(fn func(key K, value V) bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	n := t.root
 	for !n.isLeaf {
 		n = n.children[0]
@@ -366,6 +399,62 @@ func (t *BPTree[K, V]) ForEach(fn func(key K, value V) bool) {
 		}
 		n = n.next
 	}
+}
+
+func (t *BPTree[K, V]) RangeSearch(start, end K) []KVPair[K, V] {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	var results []KVPair[K, V]
+	n := t.root
+
+	for !n.isLeaf {
+		i := sort.Search(len(n.keys), func(i int) bool { return start < n.keys[i] })
+		n = n.children[i]
+	}
+
+	for n != nil {
+		for i, k := range n.keys {
+			if k >= start && k <= end {
+				results = append(results, KVPair[K, V]{Key: k, Value: n.values[i]})
+			}
+			if k > end {
+				return results
+			}
+		}
+		n = n.next
+	}
+	return results
+}
+
+func (t *BPTree[K, V]) BulkInsert(pairs []KVPair[K, V]) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, pair := range pairs {
+		t.Insert(pair.Key, pair.Value)
+	}
+}
+
+func (t *BPTree[K, V]) Flush() error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.storage != nil {
+		if err := unix.Msync(t.storage, unix.MS_SYNC); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *BPTree[K, V]) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.storage != nil {
+		if err := unix.Munmap(t.storage); err != nil {
+			return err
+		}
+		t.storage = nil
+	}
+	return nil
 }
 
 func StoreFromJSON(tree *BPTree[string, map[string]any], file string, keyField string) error {

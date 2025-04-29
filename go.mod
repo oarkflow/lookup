@@ -8,6 +8,7 @@ require (
 	github.com/oarkflow/filters v0.0.36
 	github.com/oarkflow/json v0.0.28
 	github.com/oarkflow/xid v1.2.6
+	golang.org/x/sys v0.32.0
 )
 
 require (
