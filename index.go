@@ -85,6 +85,7 @@ type Index struct {
 	ID                 string
 	TotalDocs          int
 	AvgDocLength       float64
+	defaultSortField   *SortField
 	index              map[string][]Posting
 	docLength          map[int64]int
 	documents          *BPTree[int64, GenericRecord]
@@ -108,6 +109,12 @@ type Options func(*Index)
 func WithNumOfWorkers(numOfWorkers int) Options {
 	return func(index *Index) {
 		index.numWorkers = numOfWorkers
+	}
+}
+
+func WithDefaultSortField(field string, descending bool) Options {
+	return func(index *Index) {
+		index.defaultSortField = &SortField{Field: field, Descending: descending}
 	}
 }
 
@@ -516,6 +523,9 @@ func (index *Index) Search(ctx context.Context, req Request) (Page, error) {
 	sortField := SortField{Field: req.SortField}
 	if strings.ToLower(req.SortOrder) == "desc" {
 		sortField.Descending = true
+	}
+	if sortField.Field == "" && index.defaultSortField != nil {
+		sortField = *index.defaultSortField
 	}
 	if req.Page <= 0 {
 		req.Page = 1
