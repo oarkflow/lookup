@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/goccy/go-reflect"
 	"github.com/oarkflow/filters"
 	"github.com/oarkflow/json"
+	"github.com/oarkflow/squealx"
 	"github.com/oarkflow/xid"
 
 	"github.com/oarkflow/lookup/utils"
@@ -28,35 +30,45 @@ var DefaultPath = "lookup"
 
 type GenericRecord map[string]any
 
-func (rec GenericRecord) String() string {
+func (rec GenericRecord) String(fieldsToIndex []string) string {
 	keys := make([]string, 0, len(rec))
 	for k := range rec {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	var parts []string
-	for _, k := range keys {
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		if len(fieldsToIndex) > 0 && !slices.Contains(fieldsToIndex, k) {
+			continue
+		}
 		switch val := rec[k].(type) {
 		case string:
-			parts = append(parts, val)
+			parts[i] = val
 		case json.Number:
 			if i, err := val.Int64(); err == nil {
-				parts = append(parts, strconv.FormatInt(i, 10))
+				parts[i] = strconv.FormatInt(i, 10)
 			} else if f, err := val.Float64(); err == nil {
-				parts = append(parts, strconv.FormatFloat(f, 'f', -1, 64))
+				parts[i] = strconv.FormatFloat(f, 'f', -1, 64)
 			}
 		case float64:
-			parts = append(parts, strconv.FormatFloat(val, 'f', -1, 64))
+			parts[i] = strconv.FormatFloat(val, 'f', -1, 64)
 		case int:
-			parts = append(parts, strconv.Itoa(val))
+			parts[i] = strconv.Itoa(val)
+		case int64:
+			parts[i] = strconv.FormatInt(val, 10)
+		case bool:
+			parts[i] = strconv.FormatBool(val)
+		case time.Time:
+			parts[i] = val.Format(time.RFC3339)
 		default:
+			fmt.Println(reflect.TypeOf(val))
 		}
 	}
 	return strings.Join(parts, " ")
 }
 
-func (rec GenericRecord) getFrequency() map[string]int {
-	combined := strings.ToLower(rec.String())
+func (rec GenericRecord) getFrequency(fieldsToIndex []string) map[string]int {
+	combined := strings.ToLower(rec.String(fieldsToIndex))
 	tokens := utils.Tokenize(combined)
 	freq := make(map[string]int, len(tokens))
 	for _, t := range tokens {
@@ -94,6 +106,7 @@ type Index struct {
 	cacheCapacity      int
 	indexingInProgress bool
 	numWorkers         int
+	fieldsToIndex      []string
 	searchCache        map[string]cacheEntry
 	cacheExpiry        time.Duration
 	reset              bool
@@ -109,6 +122,12 @@ type Options func(*Index)
 func WithNumOfWorkers(numOfWorkers int) Options {
 	return func(index *Index) {
 		index.numWorkers = numOfWorkers
+	}
+}
+
+func WithFieldsToIndex(fieldsToIndex ...string) Options {
+	return func(index *Index) {
+		index.fieldsToIndex = fieldsToIndex
 	}
 }
 
@@ -207,6 +226,26 @@ func (index *Index) mergePartial(partial partialIndex) {
 	index.Unlock()
 }
 
+type DBRequest struct {
+	DB    *squealx.DB
+	Query string
+}
+
+func (index *Index) BuildFromDatabase(ctx context.Context, req DBRequest, callbacks ...func(v GenericRecord) error) error {
+	if req.DB == nil {
+		return fmt.Errorf("no database provided")
+	}
+	if req.Query == "" {
+		return fmt.Errorf("no query provided")
+	}
+	var data []map[string]any
+	err := req.DB.Select(&data, req.Query)
+	if err != nil {
+		return err
+	}
+	return index.BuildFromRecords(ctx, data, callbacks...)
+}
+
 func (index *Index) BuildFromReader(ctx context.Context, r io.Reader, callbacks ...func(v GenericRecord) error) error {
 	index.Lock()
 	if index.indexingInProgress {
@@ -251,7 +290,7 @@ func (index *Index) BuildFromReader(ctx context.Context, r io.Reader, callbacks 
 				localID++
 				docID := xid.New().Int64()
 				partial.docs[docID] = rec
-				freq := rec.getFrequency()
+				freq := rec.getFrequency(index.fieldsToIndex)
 				docLen := 0
 				for term, cnt := range freq {
 					partial.inverted[term] = append(partial.inverted[term], Posting{DocID: docID, Frequency: cnt})
@@ -377,10 +416,13 @@ func (index *Index) BuildFromRecords(ctx context.Context, records any, callbacks
 			}
 			var localID, count int
 			for rec := range jobs {
+				if ctx.Err() != nil {
+					break
+				}
 				localID++
 				docID := xid.New().Int64()
 				partial.docs[docID] = rec
-				freq := rec.getFrequency()
+				freq := rec.getFrequency(index.fieldsToIndex)
 				docLen := 0
 				for term, cnt := range freq {
 					partial.inverted[term] = append(partial.inverted[term], Posting{DocID: docID, Frequency: cnt})
@@ -790,7 +832,7 @@ func (index *Index) AddDocument(rec GenericRecord) {
 	index.Lock()
 	index.searchCache = make(map[string]cacheEntry)
 	docID := xid.New().Int64()
-	freq := rec.getFrequency()
+	freq := rec.getFrequency(index.fieldsToIndex)
 	index.indexDoc(docID, rec, freq)
 	index.TotalDocs++
 	index.update()
@@ -806,7 +848,7 @@ func (index *Index) UpdateDocument(docID int64, rec GenericRecord) error {
 		return fmt.Errorf("document %d does not exist", docID)
 	}
 
-	oldFreq := oldRec.getFrequency()
+	oldFreq := oldRec.getFrequency(index.fieldsToIndex)
 	for term := range oldFreq {
 		if postings, exists := index.index[term]; exists {
 			newPostings := postings[:0]
@@ -824,7 +866,7 @@ func (index *Index) UpdateDocument(docID int64, rec GenericRecord) error {
 		index.docLength[docID] -= oldFreq[term]
 	}
 	index.documents.Insert(docID, rec)
-	newFreq := rec.getFrequency()
+	newFreq := rec.getFrequency(index.fieldsToIndex)
 	docLen := 0
 	for term, count := range newFreq {
 		docLen += count
@@ -844,7 +886,7 @@ func (index *Index) DeleteDocument(docID int64) error {
 		index.Unlock()
 		return fmt.Errorf("document %d does not exist", docID)
 	}
-	freq := rec.getFrequency()
+	freq := rec.getFrequency(index.fieldsToIndex)
 	for term := range freq {
 		if postings, exists := index.index[term]; exists {
 			newPostings := postings[:0]

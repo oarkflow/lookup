@@ -6,7 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/oarkflow/json"
+	"github.com/oarkflow/squealx"
+	"github.com/oarkflow/squealx/connection"
 
 	v1 "github.com/oarkflow/lookup"
 )
@@ -17,19 +18,29 @@ func mai1n() {
 }
 
 func main() {
-	// Initialize and build the index
+	db, _, err := connection.FromConfig(squealx.Config{
+		Host:     "localhost",
+		Port:     5432,
+		Driver:   "postgres",
+		Username: "postgres",
+		Password: "postgres",
+		Database: "oark_manager",
+	})
+	if err != nil {
+		panic(err)
+	}
 	ctx := context.Background()
-	index := v1.NewIndex("test-filter")
-	jsonFile := "/home/sujit/Projects/search/examples/charge_master.json"
+	index := v1.NewIndex("test-filter", v1.WithFieldsToIndex("modifier", "modifier_id"))
+	query := "SELECT * FROM modifiers"
 	start := time.Now()
-	err := index.Build(ctx, jsonFile)
+	err = index.BuildFromDatabase(ctx, v1.DBRequest{DB: db, Query: query})
 	if err != nil {
 		log.Fatalf("index build error: %v", err)
 	}
 	fmt.Printf("Built index for %d docs in %s\n", index.TotalDocs, time.Since(start))
 	req := v1.Request{
-		Query: "9560020",
-		Exact: true,
+		Query: "29",
+		Size:  10,
 	}
 
 	searchStart := time.Now()
@@ -38,8 +49,5 @@ func main() {
 		log.Fatalf("Search error: %v", err)
 	}
 	fmt.Printf("Found %d docs (page %d/%d) in %s\n", page.Total, page.Page, page.TotalPages, time.Since(searchStart))
-	for _, rec := range page.Items {
-		bt, _ := json.Marshal(rec)
-		fmt.Printf("Data:%s\n", string(bt))
-	}
+	fmt.Println(fmt.Sprintf("%+v", page.Items))
 }

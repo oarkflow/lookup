@@ -144,6 +144,27 @@ func (pq PhraseQuery) Evaluate(index *Index) []int64 {
 			return nil
 		}
 	}
+	// Exact mode: filter results to ensure the document contains the exact phrase.
+	if !pq.Fuzzy {
+		queryLower := strings.ToLower(pq.Phrase)
+		var filtered []int64
+		for _, docID := range result {
+			// Retrieve the document from the BPTree. We assume GetDocument returns GenericRecord.
+			recRaw, ok := index.GetDocument(docID)
+			if !ok {
+				continue
+			}
+			rec, ok := recRaw.(GenericRecord)
+			if !ok {
+				continue
+			}
+			// Use the document's string representation.
+			if strings.Contains(strings.ToLower(rec.String(index.fieldsToIndex)), queryLower) {
+				filtered = append(filtered, docID)
+			}
+		}
+		return filtered
+	}
 	return result
 }
 
