@@ -547,9 +547,9 @@ func (index *Index) Search(ctx context.Context, req Request) (Page, error) {
 	if req.Query != "" {
 		var q Query
 		if strings.Contains(req.Query, " ") {
-			q = NewPhraseQuery(req.Query, req.Exact, 1)
+			q = NewPhraseQuery(req.Query, !req.Exact, 1)
 		} else {
-			q = NewTermQuery(req.Query, req.Exact, 1)
+			q = NewTermQuery(req.Query, !req.Exact, 1)
 		}
 		switch qry := query.(type) {
 		case *FilterQuery:

@@ -97,24 +97,46 @@ func NewPhraseQuery(phrase string, fuzzy bool, threshold int) PhraseQuery {
 }
 
 func (pq PhraseQuery) Evaluate(index *Index) []int64 {
-	raw := utils.Tokenize(strings.ToLower(pq.Phrase))
-	if len(raw) == 0 {
+	tokens := utils.Tokenize(strings.ToLower(pq.Phrase))
+	if len(tokens) == 0 {
 		return nil
 	}
-	lists := make([][]int64, len(raw))
-	for i, tok := range raw {
-		postings, ok := index.index[tok]
-		if !ok {
-			return nil
+	var lists [][]int64
+	if pq.Fuzzy {
+		for _, token := range tokens {
+			fuzzyTokens := index.FuzzySearch(token, pq.FuzzyThreshold)
+			fuzzyTokens = append(fuzzyTokens, token)
+			set := make(map[int64]struct{})
+			for _, ft := range fuzzyTokens {
+				if postings, ok := index.index[ft]; ok {
+					for _, p := range postings {
+						set[p.DocID] = struct{}{}
+					}
+				}
+			}
+			if len(set) == 0 {
+				return nil
+			}
+			var ids []int64
+			for id := range set {
+				ids = append(ids, id)
+			}
+			lists = append(lists, ids)
 		}
-		ids := make([]int64, len(postings))
-		for j, p := range postings {
-			ids[j] = p.DocID
+	} else {
+		for _, token := range tokens {
+			postings, ok := index.index[token]
+			if !ok {
+				return nil
+			}
+			var ids []int64
+			for _, p := range postings {
+				ids = append(ids, p.DocID)
+			}
+			lists = append(lists, ids)
 		}
-		lists[i] = ids
 	}
-
-	// intersect all lists pairwise
+	// Intersect posting lists.
 	result := lists[0]
 	for i := 1; i < len(lists); i++ {
 		result = intersectSorted(result, lists[i])
