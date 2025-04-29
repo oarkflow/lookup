@@ -38,9 +38,8 @@ func main() {
 		log.Fatalf("Search error: %v", err)
 	}
 	fmt.Printf("Found %d docs (page %d/%d) in %s\n", page.Total, page.Page, page.TotalPages, time.Since(searchStart))
-	for _, sd := range page.Results {
-		rec, _ := index.GetDocument(sd.DocID)
+	for _, rec := range page.Items {
 		bt, _ := json.Marshal(rec)
-		fmt.Printf("DocID:%d Score:%.4f Data:%s\n", sd.DocID, sd.Score, string(bt))
+		fmt.Printf("Data:%s\n", string(bt))
 	}
 }

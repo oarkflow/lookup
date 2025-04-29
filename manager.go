@@ -79,30 +79,7 @@ func (m *Manager) Search(ctx context.Context, name string, req Request) (*Result
 		return nil, fmt.Errorf("index %s not found", name)
 	}
 
-	results, err := index.Search(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	var data []GenericRecord
-	for _, sd := range results.Results {
-		rec, ok := index.GetDocument(sd.DocID)
-		if ok {
-			record, ok := rec.(GenericRecord)
-			if ok {
-				data = append(data, record)
-			}
-		}
-	}
-	pagedData := &Result{
-		Items:      data,
-		Total:      results.Total,
-		Page:       results.Page,
-		PerPage:    results.PerPage,
-		TotalPages: results.TotalPages,
-		NextPage:   results.NextPage,
-		PrevPage:   results.PrevPage,
-	}
-	return pagedData, nil
+	return index.Search(ctx, req)
 }
 
 type NewIndexRequest struct {

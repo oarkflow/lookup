@@ -515,7 +515,34 @@ type SearchParams struct {
 	Fields     []string
 }
 
-func (index *Index) Search(ctx context.Context, req Request) (Page, error) {
+func (index *Index) Search(ctx context.Context, req Request) (*Result, error) {
+	results, err := index.SearchScoreDocs(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	var data []GenericRecord
+	for _, sd := range results.Results {
+		rec, ok := index.GetDocument(sd.DocID)
+		if ok {
+			record, ok := rec.(GenericRecord)
+			if ok {
+				data = append(data, record)
+			}
+		}
+	}
+	pagedData := &Result{
+		Items:      data,
+		Total:      results.Total,
+		Page:       results.Page,
+		PerPage:    results.PerPage,
+		TotalPages: results.TotalPages,
+		NextPage:   results.NextPage,
+		PrevPage:   results.PrevPage,
+	}
+	return pagedData, nil
+}
+
+func (index *Index) SearchScoreDocs(ctx context.Context, req Request) (Page, error) {
 	req.Match = "AND"
 	if strings.ToLower(req.Match) == "any" {
 		req.Match = "OR"
