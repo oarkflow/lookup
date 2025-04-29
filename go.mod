@@ -5,10 +5,9 @@ go 1.24.2
 require (
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/goccy/go-reflect v1.2.0
-	github.com/mitchellh/hashstructure/v2 v2.0.2
 	github.com/oarkflow/filters v0.0.36
 	github.com/oarkflow/json v0.0.28
-	github.com/oarkflow/xid v1.2.5
+	github.com/oarkflow/xid v1.2.6
 )
 
 require (

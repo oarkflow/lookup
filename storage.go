@@ -145,7 +145,6 @@ func (t *BPTree[K, V]) Search(key K) (V, bool) {
 }
 
 func (t *BPTree[K, V]) Insert(key K, value V) {
-	// Use a fixed-size array for the path to avoid heap allocations.
 	const maxDepth = 64
 	type pathEntry struct {
 		n   *node[K, V]
@@ -167,7 +166,6 @@ func (t *BPTree[K, V]) Insert(key K, value V) {
 		t.cacheNode(cur)
 		return
 	}
-	// Insert key and value into the leaf node; capacity is preallocated.
 	cur.keys = cur.keys[:len(cur.keys)+1]
 	cur.values = cur.values[:len(cur.values)+1]
 	copy(cur.keys[i+1:], cur.keys[i:len(cur.keys)-1])
@@ -179,33 +177,26 @@ func (t *BPTree[K, V]) Insert(key K, value V) {
 		t.cacheNode(cur)
 		return
 	}
-	// Split the leaf node.
 	newChild, splitKey := t.splitLeaf(cur)
 	t.cacheNode(cur)
 	t.cacheNode(newChild)
-
-	// Propagate splits upward.
 	for depth > 0 {
 		depth--
 		parent := path[depth].n
 		childIndex := path[depth].idx
-		// Insert splitKey and newChild into parent without extra allocations.
 		parent.keys = parent.keys[:len(parent.keys)+1]
 		copy(parent.keys[childIndex+1:], parent.keys[childIndex:len(parent.keys)-1])
 		parent.keys[childIndex] = splitKey
 		parent.children = parent.children[:len(parent.children)+1]
 		copy(parent.children[childIndex+2:], parent.children[childIndex+1:len(parent.children)-1])
 		parent.children[childIndex+1] = newChild
-
 		if len(parent.children) <= t.order {
 			t.cacheNode(parent)
 			return
 		}
-		// Split the internal node.
 		newChild, splitKey = t.splitInternal(parent)
 		t.cacheNode(newChild)
 	}
-	// Create new root.
 	newRoot := &node[K, V]{
 		id:       t.nextNodeID,
 		isLeaf:   false,
