@@ -12,12 +12,12 @@ import (
 	v1 "github.com/oarkflow/lookup"
 )
 
-func mai1n() {
+func main() {
 	manager := v1.NewManager()
 	manager.StartHTTP(":8080")
 }
 
-func main() {
+func mai1n() {
 	// Initialize and build the index
 	ctx := context.Background()
 	index := v1.NewIndex("test-filter")

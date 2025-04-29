@@ -533,16 +533,21 @@ func (index *Index) Search(ctx context.Context, req Request) (Page, error) {
 		query = NewFilterQuery(nil, filters.Boolean(req.Match), req.Reverse, fil...)
 	}
 	if req.Query != "" {
-		termQuery := NewTermQuery(req.Query, req.Exact, 1)
+		var q Query
+		if strings.Contains(req.Query, " ") {
+			q = NewPhraseQuery(req.Query, req.Exact, 1)
+		} else {
+			q = NewTermQuery(req.Query, req.Exact, 1)
+		}
 		switch qry := query.(type) {
 		case *FilterQuery:
-			qry.Term = termQuery
+			qry.Term = q
 			query = qry
 		case FilterQuery:
-			qry.Term = termQuery
+			qry.Term = q
 			query = qry
 		case nil:
-			query = termQuery
+			query = q
 		}
 	}
 	intKey, err := req.Checksum()

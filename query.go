@@ -28,6 +28,18 @@ func NewTermQuery(term string, fuzzy bool, threshold int) TermQuery {
 	}
 }
 
+func (index *Index) Evaluate(tokens []string) []int64 {
+	var docSet []int64
+	for _, token := range tokens {
+		if postings, ok := index.Index[token]; ok {
+			for _, p := range postings {
+				docSet = append(docSet, p.DocID)
+			}
+		}
+	}
+	return docSet
+}
+
 func (tq TermQuery) Evaluate(index *Index) []int64 {
 	var tokens []string
 	if tq.Fuzzy {
@@ -35,23 +47,40 @@ func (tq TermQuery) Evaluate(index *Index) []int64 {
 	} else {
 		tokens = []string{strings.ToLower(tq.Term)}
 	}
-	docSet := make(map[int64]struct{})
-	for _, token := range tokens {
-		if postings, ok := index.Index[token]; ok {
-			for _, p := range postings {
-				docSet[p.DocID] = struct{}{}
-			}
-		}
-	}
-	var result []int64
-	for docID := range docSet {
-		result = append(result, docID)
-	}
-	return result
+	return index.Evaluate(tokens)
 }
 
 func (tq TermQuery) Tokens() []string {
 	return []string{strings.ToLower(tq.Term)}
+}
+
+type PhraseQuery struct {
+	Phrase         string
+	Fuzzy          bool
+	FuzzyThreshold int
+}
+
+func NewPhraseQuery(phrase string, fuzzy bool, threshold int) PhraseQuery {
+	return PhraseQuery{
+		Phrase:         phrase,
+		Fuzzy:          fuzzy,
+		FuzzyThreshold: threshold,
+	}
+}
+
+func (pq PhraseQuery) Evaluate(index *Index) []int64 {
+	tokens := utils.Tokenize(strings.ToLower(pq.Phrase))
+	for _, token := range tokens {
+		if pq.Fuzzy {
+			tokens = append(tokens, index.FuzzySearch(token, pq.FuzzyThreshold)...)
+		}
+	}
+
+	return index.Evaluate(tokens)
+}
+
+func (pq PhraseQuery) Tokens() []string {
+	return utils.Tokenize(strings.ToLower(pq.Phrase))
 }
 
 type WildcardQuery struct {
