@@ -264,12 +264,12 @@ func (m *Manager) StartHTTP(addr string) {
 			return
 		}
 		if strings.TrimSpace(req.ID) == "" {
-			http.Error(w, "Index ID required in request body", http.StatusBadRequest)
+			http.Error(w, "index ID required in request body", http.StatusBadRequest)
 			return
 		}
 		index := NewIndex(req.ID)
 		m.AddIndex(req.ID, index)
-		w.Write([]byte(fmt.Sprintf("Index %s created successfully", req.ID)))
+		w.Write([]byte(fmt.Sprintf("index %s created successfully", req.ID)))
 	})
 	http.HandleFunc("/indexes", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -287,7 +287,7 @@ func (m *Manager) StartHTTP(addr string) {
 		}
 		indexName := r.PathValue("index")
 		if strings.TrimSpace(indexName) == "" {
-			http.Error(w, "Index name required in path", http.StatusBadRequest)
+			http.Error(w, "index name required in path", http.StatusBadRequest)
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -318,12 +318,12 @@ func (m *Manager) StartHTTP(addr string) {
 			http.Error(w, fmt.Sprintf("Build error: %v", err), http.StatusInternalServerError)
 			return
 		}
-		w.Write([]byte("Index built successfully"))
+		w.Write([]byte("index built successfully"))
 	})
 	http.HandleFunc("/{index}/search", func(w http.ResponseWriter, r *http.Request) {
 		indexName := r.PathValue("index")
 		if strings.TrimSpace(indexName) == "" {
-			http.Error(w, "Index name required in path", http.StatusBadRequest)
+			http.Error(w, "index name required in path", http.StatusBadRequest)
 			return
 		}
 		req, err := prepareQuery(r)

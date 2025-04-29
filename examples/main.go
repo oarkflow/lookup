@@ -6,7 +6,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/oarkflow/filters"
 	"github.com/oarkflow/json"
 
 	v1 "github.com/oarkflow/lookup"
@@ -21,20 +20,16 @@ func mai1n() {
 	// Initialize and build the index
 	ctx := context.Background()
 	index := v1.NewIndex("test-filter")
-	jsonFile := "/Users/sujit/Sites/oarkflow2/search/examples/charge_master.json"
+	jsonFile := "/home/sujit/Projects/search/examples/charge_master.json"
 	start := time.Now()
 	err := index.Build(ctx, jsonFile)
 	if err != nil {
-		log.Fatalf("Index build error: %v", err)
+		log.Fatalf("index build error: %v", err)
 	}
 	fmt.Printf("Built index for %d docs in %s\n", index.TotalDocs, time.Since(start))
 	req := v1.Request{
 		Query: "9560020",
 		Exact: true,
-		Filters: []v1.Filter{
-			{Field: "charge_amt", Operator: filters.GreaterThanEqual, Value: 100},
-			{Field: "charge_type", Operator: filters.Equal, Value: "ED_FACILITY"},
-		},
 	}
 
 	searchStart := time.Now()

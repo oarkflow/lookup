@@ -28,18 +28,6 @@ func NewTermQuery(term string, fuzzy bool, threshold int) TermQuery {
 	}
 }
 
-func (index *Index) Evaluate(tokens []string) []int64 {
-	var docSet []int64
-	for _, token := range tokens {
-		if postings, ok := index.Index[token]; ok {
-			for _, p := range postings {
-				docSet = append(docSet, p.DocID)
-			}
-		}
-	}
-	return docSet
-}
-
 func (tq TermQuery) Evaluate(index *Index) []int64 {
 	var tokens []string
 	if tq.Fuzzy {
@@ -69,14 +57,52 @@ func NewPhraseQuery(phrase string, fuzzy bool, threshold int) PhraseQuery {
 }
 
 func (pq PhraseQuery) Evaluate(index *Index) []int64 {
+	// Tokenize the phrase to get each word.
 	tokens := utils.Tokenize(strings.ToLower(pq.Phrase))
-	for _, token := range tokens {
-		if pq.Fuzzy {
-			tokens = append(tokens, index.FuzzySearch(token, pq.FuzzyThreshold)...)
+	// For each token, get the matching document IDs.
+	var docsByToken [][]int64
+	if pq.Fuzzy {
+		// For fuzzy search, each token's posting list is the union of fuzzy matches and the token itself.
+		for _, token := range tokens {
+			fuzzyTokens := index.FuzzySearch(token, pq.FuzzyThreshold)
+			fuzzyTokens = append(fuzzyTokens, token) // include the original token
+			set := make(map[int64]struct{})
+			for _, ft := range fuzzyTokens {
+				if postings, ok := index.index[ft]; ok {
+					for _, p := range postings {
+						set[p.DocID] = struct{}{}
+					}
+				}
+			}
+			if len(set) == 0 {
+				return []int64{}
+			}
+			var ids []int64
+			for id := range set {
+				ids = append(ids, id)
+			}
+			docsByToken = append(docsByToken, ids)
+		}
+	} else {
+		// Exact search: for each token, get the posting list directly.
+		for _, token := range tokens {
+			postings, ok := index.index[token]
+			if !ok {
+				return []int64{}
+			}
+			var ids []int64
+			for _, p := range postings {
+				ids = append(ids, p.DocID)
+			}
+			docsByToken = append(docsByToken, ids)
 		}
 	}
-
-	return index.Evaluate(tokens)
+	// Intersect the document ID slices.
+	result := docsByToken[0]
+	for i := 1; i < len(docsByToken); i++ {
+		result = utils.Intersect(result, docsByToken[i])
+	}
+	return result
 }
 
 func (pq PhraseQuery) Tokens() []string {
@@ -96,7 +122,7 @@ func (wq WildcardQuery) Evaluate(index *Index) []int64 {
 	if err != nil {
 		return result
 	}
-	index.Documents.ForEach(func(docID int64, rec GenericRecord) bool {
+	index.documents.ForEach(func(docID int64, rec GenericRecord) bool {
 		if val, ok := rec[wq.Field]; ok {
 			strVal := utils.ToString(val)
 			if re.MatchString(strVal) {
@@ -135,7 +161,7 @@ func (sq SQLQuery) Evaluate(index *Index) []int64 {
 	if err != nil || rule == nil {
 		return base
 	}
-	index.Documents.ForEach(func(docID int64, rec GenericRecord) bool {
+	index.documents.ForEach(func(docID int64, rec GenericRecord) bool {
 		if rule.Match(rec) {
 			result = append(result, docID)
 		}
@@ -174,7 +200,7 @@ func (fq FilterQuery) Evaluate(index *Index) []int64 {
 	if fq.Filters == nil {
 		return base
 	}
-	index.Documents.ForEach(func(docID int64, rec GenericRecord) bool {
+	index.documents.ForEach(func(docID int64, rec GenericRecord) bool {
 		if fq.Filters.Match(rec) {
 			result = append(result, docID)
 		}

@@ -81,11 +81,11 @@ type cacheEntry struct {
 type Index struct {
 	sync.RWMutex
 	ID                 string
-	Index              map[string][]Posting
-	DocLengths         map[int64]int
-	Documents          *BPTree[int64, GenericRecord]
 	TotalDocs          int
 	AvgDocLength       float64
+	index              map[string][]Posting
+	docLength          map[int64]int
+	documents          *BPTree[int64, GenericRecord]
 	order              int
 	storage            string
 	cacheCapacity      int
@@ -146,8 +146,8 @@ func NewIndex(id string, opts ...Options) *Index {
 	index := &Index{
 		ID:            id,
 		numWorkers:    runtime.NumCPU(),
-		Index:         make(map[string][]Posting),
-		DocLengths:    make(map[int64]int),
+		index:         make(map[string][]Posting),
+		docLength:     make(map[int64]int),
 		order:         3,
 		storage:       storagePath,
 		cacheCapacity: 1000,
@@ -160,7 +160,7 @@ func NewIndex(id string, opts ...Options) *Index {
 	if index.reset {
 		os.Remove(storagePath)
 	}
-	index.Documents = NewBPTree[int64, GenericRecord](index.order, index.storage, index.cacheCapacity)
+	index.documents = NewBPTree[int64, GenericRecord](index.order, index.storage, index.cacheCapacity)
 	index.startCacheCleanup()
 	return index
 }
@@ -169,7 +169,7 @@ func (index *Index) FuzzySearch(term string, threshold int) []string {
 	index.RLock()
 	defer index.RUnlock()
 	var results []string
-	for token := range index.Index {
+	for token := range index.index {
 		if utils.BoundedLevenshtein(term, token, threshold) <= threshold {
 			results = append(results, token)
 		}
@@ -187,13 +187,13 @@ type partialIndex struct {
 func (index *Index) mergePartial(partial partialIndex) {
 	index.Lock()
 	for id, rec := range partial.docs {
-		index.Documents.Insert(id, rec)
+		index.documents.Insert(id, rec)
 	}
 	for id, length := range partial.lengths {
-		index.DocLengths[id] = length
+		index.docLength[id] = length
 	}
 	for term, postings := range partial.inverted {
-		index.Index[term] = append(index.Index[term], postings...)
+		index.index[term] = append(index.index[term], postings...)
 	}
 	index.TotalDocs += partial.totalDocs
 	index.Unlock()
@@ -292,6 +292,18 @@ func (index *Index) BuildFromReader(ctx context.Context, r io.Reader, callbacks 
 	index.update()
 	index.Unlock()
 	return nil
+}
+
+func (index *Index) Evaluate(tokens []string) []int64 {
+	var docSet []int64
+	for _, token := range tokens {
+		if postings, ok := index.index[token]; ok {
+			for _, p := range postings {
+				docSet = append(docSet, p.DocID)
+			}
+		}
+	}
+	return docSet
 }
 
 func (index *Index) Build(ctx context.Context, input any, callbacks ...func(v GenericRecord) error) error {
@@ -426,18 +438,18 @@ func (index *Index) BuildFromStruct(ctx context.Context, slice any, callbacks ..
 }
 
 func (index *Index) indexDoc(docID int64, rec GenericRecord, freq map[string]int) {
-	index.Documents.Insert(docID, rec)
+	index.documents.Insert(docID, rec)
 	docLen := 0
 	for t, count := range freq {
-		index.Index[t] = append(index.Index[t], Posting{DocID: docID, Frequency: count})
+		index.index[t] = append(index.index[t], Posting{DocID: docID, Frequency: count})
 		docLen += count
 	}
-	index.DocLengths[docID] = docLen
+	index.docLength[docID] = docLen
 }
 
 func (index *Index) update() {
 	total := 0
-	for _, l := range index.DocLengths {
+	for _, l := range index.docLength {
 		total += l
 	}
 	if index.TotalDocs > 0 {
@@ -451,9 +463,9 @@ func (index *Index) bm25Score(queryTokens []string, docID int64, k1, b float64) 
 	index.RLock()
 	defer index.RUnlock()
 	score := 0.0
-	docLength := float64(index.DocLengths[docID])
+	docLength := float64(index.docLength[docID])
 	for _, term := range queryTokens {
-		postings, ok := index.Index[term]
+		postings, ok := index.index[term]
 		if !ok {
 			continue
 		}
@@ -633,8 +645,8 @@ func (index *Index) Search(ctx context.Context, req Request) (Page, error) {
 
 func (index *Index) sortData(scored []ScoredDoc, fields []SortField) {
 	sort.SliceStable(scored, func(i, j int) bool {
-		docI, _ := index.Documents.Search(scored[i].DocID)
-		docJ, _ := index.Documents.Search(scored[j].DocID)
+		docI, _ := index.documents.Search(scored[i].DocID)
+		docJ, _ := index.documents.Search(scored[j].DocID)
 		for _, field := range fields {
 			valI, okI := docI[field.Field]
 			valJ, okJ := docJ[field.Field]
@@ -740,7 +752,7 @@ func (index *Index) AddDocument(rec GenericRecord) {
 func (index *Index) UpdateDocument(docID int64, rec GenericRecord) error {
 	index.Lock()
 	index.searchCache = make(map[string]cacheEntry)
-	oldRec, ok := index.Documents.Search(docID)
+	oldRec, ok := index.documents.Search(docID)
 	if !ok {
 		index.Unlock()
 		return fmt.Errorf("document %d does not exist", docID)
@@ -748,7 +760,7 @@ func (index *Index) UpdateDocument(docID int64, rec GenericRecord) error {
 
 	oldFreq := oldRec.getFrequency()
 	for term := range oldFreq {
-		if postings, exists := index.Index[term]; exists {
+		if postings, exists := index.index[term]; exists {
 			newPostings := postings[:0]
 			for _, p := range postings {
 				if p.DocID != docID {
@@ -756,21 +768,21 @@ func (index *Index) UpdateDocument(docID int64, rec GenericRecord) error {
 				}
 			}
 			if len(newPostings) == 0 {
-				delete(index.Index, term)
+				delete(index.index, term)
 			} else {
-				index.Index[term] = newPostings
+				index.index[term] = newPostings
 			}
 		}
-		index.DocLengths[docID] -= oldFreq[term]
+		index.docLength[docID] -= oldFreq[term]
 	}
-	index.Documents.Insert(docID, rec)
+	index.documents.Insert(docID, rec)
 	newFreq := rec.getFrequency()
 	docLen := 0
 	for term, count := range newFreq {
 		docLen += count
-		index.Index[term] = append(index.Index[term], Posting{DocID: docID, Frequency: count})
+		index.index[term] = append(index.index[term], Posting{DocID: docID, Frequency: count})
 	}
-	index.DocLengths[docID] = docLen
+	index.docLength[docID] = docLen
 	index.update()
 	index.Unlock()
 	return nil
@@ -779,14 +791,14 @@ func (index *Index) UpdateDocument(docID int64, rec GenericRecord) error {
 func (index *Index) DeleteDocument(docID int64) error {
 	index.Lock()
 	index.searchCache = make(map[string]cacheEntry)
-	rec, ok := index.Documents.Search(docID)
+	rec, ok := index.documents.Search(docID)
 	if !ok {
 		index.Unlock()
 		return fmt.Errorf("document %d does not exist", docID)
 	}
 	freq := rec.getFrequency()
 	for term := range freq {
-		if postings, exists := index.Index[term]; exists {
+		if postings, exists := index.index[term]; exists {
 			newPostings := postings[:0]
 			for _, p := range postings {
 				if p.DocID != docID {
@@ -794,14 +806,14 @@ func (index *Index) DeleteDocument(docID int64) error {
 				}
 			}
 			if len(newPostings) == 0 {
-				delete(index.Index, term)
+				delete(index.index, term)
 			} else {
-				index.Index[term] = newPostings
+				index.index[term] = newPostings
 			}
 		}
 	}
-	index.Documents.Delete(docID)
-	delete(index.DocLengths, docID)
+	index.documents.Delete(docID)
+	delete(index.docLength, docID)
 	index.TotalDocs--
 	index.update()
 	index.Unlock()
@@ -809,7 +821,7 @@ func (index *Index) DeleteDocument(docID int64) error {
 }
 
 func (index *Index) GetDocument(id int64) (any, bool) {
-	return index.Documents.Search(id)
+	return index.documents.Search(id)
 }
 
 type QueryFunc func(index *Index) []int
