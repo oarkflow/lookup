@@ -334,7 +334,7 @@ func (index *Index) BuildFromFile(ctx context.Context, path string, callbacks ..
 	return index.BuildFromReader(ctx, file, callbacks...)
 }
 
-func (index *Index) BuildFromRecords(ctx context.Context, records []GenericRecord, callbacks ...func(v GenericRecord) error) error {
+func (index *Index) BuildFromRecords(ctx context.Context, records any, callbacks ...func(v GenericRecord) error) error {
 	index.Lock()
 	if index.indexingInProgress {
 		index.Unlock()
@@ -390,11 +390,21 @@ func (index *Index) BuildFromRecords(ctx context.Context, records []GenericRecor
 		}(w)
 	}
 	go func() {
-		for _, rec := range records {
-			if ctx.Err() != nil {
-				break
+		switch records := records.(type) {
+		case []GenericRecord:
+			for _, rec := range records {
+				if ctx.Err() != nil {
+					break
+				}
+				jobs <- rec
 			}
-			jobs <- rec
+		case []map[string]any:
+			for _, rec := range records {
+				if ctx.Err() != nil {
+					break
+				}
+				jobs <- rec
+			}
 		}
 		close(jobs)
 	}()
