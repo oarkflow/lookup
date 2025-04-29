@@ -2,6 +2,7 @@ package lookup
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/oarkflow/filters"
@@ -29,17 +30,56 @@ func NewTermQuery(term string, fuzzy bool, threshold int) TermQuery {
 }
 
 func (tq TermQuery) Evaluate(index *Index) []int64 {
-	var tokens []string
-	if tq.Fuzzy {
-		tokens = index.FuzzySearch(strings.ToLower(tq.Term), tq.FuzzyThreshold)
-	} else {
-		tokens = []string{strings.ToLower(tq.Term)}
+	term := strings.ToLower(tq.Term)
+	if !tq.Fuzzy {
+		if postings, ok := index.index[term]; ok {
+			out := make([]int64, len(postings))
+			for i, p := range postings {
+				out[i] = p.DocID
+			}
+			return out
+		}
+		return nil
 	}
-	return index.Evaluate(tokens)
+	candidates := index.FuzzySearch(term, tq.FuzzyThreshold)
+	candidates = append(candidates, term)
+	seen := map[int64]struct{}{}
+	var out []int64
+	for _, tok := range candidates {
+		if postings, ok := index.index[tok]; ok {
+			for _, p := range postings {
+				if _, exists := seen[p.DocID]; !exists {
+					seen[p.DocID] = struct{}{}
+					out = append(out, p.DocID)
+				}
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 func (tq TermQuery) Tokens() []string {
 	return []string{strings.ToLower(tq.Term)}
+}
+
+// intersectSorted returns the intersection of two sorted slices (O(n+m)).
+func intersectSorted(a, b []int64) []int64 {
+	var res []int64
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		switch {
+		case a[i] == b[j]:
+			res = append(res, a[i])
+			i++
+			j++
+		case a[i] < b[j]:
+			i++
+		default:
+			j++
+		}
+	}
+	return res
 }
 
 type PhraseQuery struct {
@@ -57,50 +97,30 @@ func NewPhraseQuery(phrase string, fuzzy bool, threshold int) PhraseQuery {
 }
 
 func (pq PhraseQuery) Evaluate(index *Index) []int64 {
-	// Tokenize the phrase to get each word.
-	tokens := utils.Tokenize(strings.ToLower(pq.Phrase))
-	// For each token, get the matching document IDs.
-	var docsByToken [][]int64
-	if pq.Fuzzy {
-		// For fuzzy search, each token's posting list is the union of fuzzy matches and the token itself.
-		for _, token := range tokens {
-			fuzzyTokens := index.FuzzySearch(token, pq.FuzzyThreshold)
-			fuzzyTokens = append(fuzzyTokens, token) // include the original token
-			set := make(map[int64]struct{})
-			for _, ft := range fuzzyTokens {
-				if postings, ok := index.index[ft]; ok {
-					for _, p := range postings {
-						set[p.DocID] = struct{}{}
-					}
-				}
-			}
-			if len(set) == 0 {
-				return []int64{}
-			}
-			var ids []int64
-			for id := range set {
-				ids = append(ids, id)
-			}
-			docsByToken = append(docsByToken, ids)
-		}
-	} else {
-		// Exact search: for each token, get the posting list directly.
-		for _, token := range tokens {
-			postings, ok := index.index[token]
-			if !ok {
-				return []int64{}
-			}
-			var ids []int64
-			for _, p := range postings {
-				ids = append(ids, p.DocID)
-			}
-			docsByToken = append(docsByToken, ids)
-		}
+	raw := utils.Tokenize(strings.ToLower(pq.Phrase))
+	if len(raw) == 0 {
+		return nil
 	}
-	// Intersect the document ID slices.
-	result := docsByToken[0]
-	for i := 1; i < len(docsByToken); i++ {
-		result = utils.Intersect(result, docsByToken[i])
+	lists := make([][]int64, len(raw))
+	for i, tok := range raw {
+		postings, ok := index.index[tok]
+		if !ok {
+			return nil
+		}
+		ids := make([]int64, len(postings))
+		for j, p := range postings {
+			ids[j] = p.DocID
+		}
+		lists[i] = ids
+	}
+
+	// intersect all lists pairwise
+	result := lists[0]
+	for i := 1; i < len(lists); i++ {
+		result = intersectSorted(result, lists[i])
+		if len(result) == 0 {
+			return nil
+		}
 	}
 	return result
 }

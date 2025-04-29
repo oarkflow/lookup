@@ -54,7 +54,7 @@ func (rec GenericRecord) String() string {
 }
 
 func (rec GenericRecord) getFrequency() map[string]int {
-	combined := rec.String()
+	combined := strings.ToLower(rec.String())
 	tokens := utils.Tokenize(combined)
 	freq := make(map[string]int, len(tokens))
 	for _, t := range tokens {
