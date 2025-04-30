@@ -18,6 +18,8 @@ import (
 
 	"github.com/oarkflow/filters"
 	"github.com/oarkflow/json"
+
+	"github.com/oarkflow/lookup/utils"
 )
 
 type Manager struct {
@@ -211,7 +213,7 @@ func prepareQuery(r *http.Request) (Request, error) {
 	if extra != nil && query.Filters == nil {
 		query.Filters = extra
 	}
-	condition := strings.TrimSpace(strings.ToLower(query.Condition))
+	condition := strings.TrimSpace(utils.ToLower(query.Condition))
 	if condition != "" {
 		rule, err := filters.ParseSQL(condition)
 		if err != nil {

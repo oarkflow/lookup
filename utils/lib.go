@@ -179,7 +179,7 @@ func RowCount(filePath string) (int, error) {
 // Tokenize tokenizes a mutable byte slice in place.
 // It converts ASCII letters to lowercase and returns a slice of tokens
 // without performing extra allocations for temporary strings.
-func Tokenize1(text string) []string {
+func Tokenize(text string) []string {
 	buf := UnsafeBytes(text)
 	// We will return slice headers referencing parts of buf.
 	var tokens []string
@@ -224,11 +224,11 @@ func Tokenize1(text string) []string {
 func isAlphaNum(b byte) bool {
 	return (b >= 'a' && b <= 'z') ||
 		(b >= 'A' && b <= 'Z') ||
-		(b >= '0' && b <= '9')
+		(b >= '0' && b <= '9') || b == '_'
 }
 
-func Tokenize(text string) []string {
-	text = strings.ToLower(text)
+func TokenizeOld(text string) []string {
+	text = ToLower(text)
 	var sb strings.Builder
 	for _, r := range text {
 

@@ -30,7 +30,7 @@ func NewTermQuery(term string, fuzzy bool, threshold int) TermQuery {
 }
 
 func (tq TermQuery) Evaluate(index *Index) []int64 {
-	term := strings.ToLower(tq.Term)
+	term := utils.ToLower(tq.Term)
 	if !tq.Fuzzy {
 		if postings, ok := index.index[term]; ok {
 			out := make([]int64, len(postings))
@@ -60,7 +60,7 @@ func (tq TermQuery) Evaluate(index *Index) []int64 {
 }
 
 func (tq TermQuery) Tokens() []string {
-	return []string{strings.ToLower(tq.Term)}
+	return []string{utils.ToLower(tq.Term)}
 }
 
 // intersectSorted returns the intersection of two sorted slices (O(n+m)).
@@ -97,7 +97,7 @@ func NewPhraseQuery(phrase string, fuzzy bool, threshold int) PhraseQuery {
 }
 
 func (pq PhraseQuery) Evaluate(index *Index) []int64 {
-	tokens := utils.Tokenize(strings.ToLower(pq.Phrase))
+	tokens := utils.Tokenize(utils.ToLower(pq.Phrase))
 	if len(tokens) == 0 {
 		return nil
 	}
@@ -146,7 +146,7 @@ func (pq PhraseQuery) Evaluate(index *Index) []int64 {
 	}
 	// Exact mode: filter results to ensure the document contains the exact phrase.
 	if !pq.Fuzzy {
-		queryLower := strings.ToLower(pq.Phrase)
+		queryLower := utils.ToLower(pq.Phrase)
 		var filtered []int64
 		for _, docID := range result {
 			// Retrieve the document from the BPTree. We assume GetDocument returns GenericRecord.
@@ -159,7 +159,7 @@ func (pq PhraseQuery) Evaluate(index *Index) []int64 {
 				continue
 			}
 			// Use the document's string representation.
-			if strings.Contains(strings.ToLower(rec.String(index.fieldsToIndex)), queryLower) {
+			if strings.Contains(utils.ToLower(rec.String(index.fieldsToIndex)), queryLower) {
 				filtered = append(filtered, docID)
 			}
 		}
@@ -169,7 +169,7 @@ func (pq PhraseQuery) Evaluate(index *Index) []int64 {
 }
 
 func (pq PhraseQuery) Tokens() []string {
-	return utils.Tokenize(strings.ToLower(pq.Phrase))
+	return utils.Tokenize(utils.ToLower(pq.Phrase))
 }
 
 type WildcardQuery struct {
@@ -199,7 +199,7 @@ func (wq WildcardQuery) Evaluate(index *Index) []int64 {
 
 func (wq WildcardQuery) Tokens() []string {
 	// Return the pattern as token (wildcard removed for simplicity).
-	return []string{strings.ToLower(wq.Pattern)}
+	return []string{utils.ToLower(wq.Pattern)}
 }
 
 type SQLQuery struct {

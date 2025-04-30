@@ -59,20 +59,20 @@ func (rec GenericRecord) String(fieldsToIndex []string) string {
 		case bool:
 			parts[i] = strconv.FormatBool(val)
 		case time.Time:
-			// Format time without spaces so it remains a single term.
 			if val.Hour() == 0 && val.Minute() == 0 && val.Second() == 0 && val.Nanosecond() == 0 {
 				parts[i] = val.Format("2006-01-02")
 			} else {
 				parts[i] = val.Format("2006-01-02T15:04:05.000000-0700")
 			}
 		default:
+			parts[i] = utils.ToString(val)
 		}
 	}
 	return strings.Join(parts, " ")
 }
 
 func (rec GenericRecord) getFrequency(fieldsToIndex []string) map[string]int {
-	combined := strings.ToLower(rec.String(fieldsToIndex))
+	combined := utils.ToLower(rec.String(fieldsToIndex))
 	tokens := utils.Tokenize(combined)
 	freq := make(map[string]int, len(tokens))
 	for _, t := range tokens {
@@ -369,6 +369,8 @@ func (index *Index) Build(ctx context.Context, input any, callbacks ...func(v Ge
 		return index.BuildFromReader(ctx, bytes.NewReader(v), callbacks...)
 	case io.Reader:
 		return index.BuildFromReader(ctx, v, callbacks...)
+	case DBRequest:
+		return index.BuildFromDatabase(ctx, v, callbacks...)
 	case []GenericRecord:
 		return index.BuildFromRecords(ctx, v, callbacks...)
 	case IndexRequest:
@@ -600,11 +602,11 @@ func (index *Index) Search(ctx context.Context, req Request) (*Result, error) {
 
 func (index *Index) SearchScoreDocs(ctx context.Context, req Request) (Page, error) {
 	req.Match = "AND"
-	if strings.ToLower(req.Match) == "any" {
+	if utils.ToLower(req.Match) == "any" {
 		req.Match = "OR"
 	}
 	sortField := SortField{Field: req.SortField}
-	if strings.ToLower(req.SortOrder) == "desc" {
+	if utils.ToLower(req.SortOrder) == "desc" {
 		sortField.Descending = true
 	}
 	if sortField.Field == "" && index.defaultSortField != nil {
