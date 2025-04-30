@@ -21,7 +21,7 @@ import (
 	"github.com/oarkflow/filters"
 	"github.com/oarkflow/json"
 	"github.com/oarkflow/squealx"
-	"github.com/oarkflow/xid"
+	"github.com/oarkflow/xid/wuid"
 
 	"github.com/oarkflow/lookup/utils"
 )
@@ -59,9 +59,13 @@ func (rec GenericRecord) String(fieldsToIndex []string) string {
 		case bool:
 			parts[i] = strconv.FormatBool(val)
 		case time.Time:
-			parts[i] = val.Format(time.RFC3339)
+			// Format time without spaces so it remains a single term.
+			if val.Hour() == 0 && val.Minute() == 0 && val.Second() == 0 && val.Nanosecond() == 0 {
+				parts[i] = val.Format("2006-01-02")
+			} else {
+				parts[i] = val.Format("2006-01-02T15:04:05.000000-0700")
+			}
 		default:
-			fmt.Println(reflect.TypeOf(val))
 		}
 	}
 	return strings.Join(parts, " ")
@@ -288,7 +292,7 @@ func (index *Index) BuildFromReader(ctx context.Context, r io.Reader, callbacks 
 					return
 				}
 				localID++
-				docID := xid.New().Int64()
+				docID := wuid.New().Int64()
 				partial.docs[docID] = rec
 				freq := rec.getFrequency(index.fieldsToIndex)
 				docLen := 0
@@ -420,7 +424,7 @@ func (index *Index) BuildFromRecords(ctx context.Context, records any, callbacks
 					break
 				}
 				localID++
-				docID := xid.New().Int64()
+				docID := wuid.New().Int64()
 				partial.docs[docID] = rec
 				freq := rec.getFrequency(index.fieldsToIndex)
 				docLen := 0
@@ -831,7 +835,7 @@ func smartPaginate(docs []ScoredDoc, page, perPage int) Page {
 func (index *Index) AddDocument(rec GenericRecord) {
 	index.Lock()
 	index.searchCache = make(map[string]cacheEntry)
-	docID := xid.New().Int64()
+	docID := wuid.New().Int64()
 	freq := rec.getFrequency(index.fieldsToIndex)
 	index.indexDoc(docID, rec, freq)
 	index.TotalDocs++

@@ -24,14 +24,14 @@ func main() {
 		Driver:   "postgres",
 		Username: "postgres",
 		Password: "postgres",
-		Database: "oark_manager",
+		Database: "clear_dev",
 	})
 	if err != nil {
 		panic(err)
 	}
 	ctx := context.Background()
-	index := v1.NewIndex("test-filter", v1.WithFieldsToIndex("modifier", "modifier_id"))
-	query := "SELECT * FROM modifiers"
+	index := v1.NewIndex("test-filter", v1.WithFieldsToIndex("end_effective_date", "modifier", "provider_category", "charge_master_id", "work_item_id", "cpt_hcpcs_code", "client_internal_code", "effective_date", "profee_type", "facility_type", "charge_type"))
+	query := "SELECT * FROM charge_master"
 	start := time.Now()
 	err = index.BuildFromDatabase(ctx, v1.DBRequest{DB: db, Query: query})
 	if err != nil {
@@ -39,7 +39,7 @@ func main() {
 	}
 	fmt.Printf("Built index for %d docs in %s\n", index.TotalDocs, time.Since(start))
 	req := v1.Request{
-		Query: "29",
+		Query: "ARTHROCENTESIS",
 		Size:  10,
 	}
 

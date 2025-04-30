@@ -10,7 +10,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/oarkflow/xid"
+	"github.com/oarkflow/xid/wuid"
 
 	"golang.org/x/sys/unix"
 
@@ -469,7 +469,7 @@ func StoreFromJSON(tree *BPTree[string, map[string]any], file string, keyField s
 	for _, rec := range records {
 		v, ok := rec[keyField]
 		if !ok {
-			v = xid.New().String()
+			v = wuid.New().String()
 		}
 		key := utils.ToString(v)
 		tree.Insert(key, rec)
