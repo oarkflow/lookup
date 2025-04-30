@@ -21,7 +21,6 @@ import (
 	"github.com/oarkflow/filters"
 	"github.com/oarkflow/json"
 	"github.com/oarkflow/squealx"
-	"github.com/oarkflow/xid/wuid"
 
 	"github.com/oarkflow/lookup/utils"
 )
@@ -30,7 +29,7 @@ var DefaultPath = "lookup"
 
 type GenericRecord map[string]any
 
-func (rec GenericRecord) String(fieldsToIndex []string) string {
+func (rec GenericRecord) String(fieldsToIndex []string, except []string) string {
 	keys := make([]string, 0, len(rec))
 	for k := range rec {
 		keys = append(keys, k)
@@ -38,7 +37,7 @@ func (rec GenericRecord) String(fieldsToIndex []string) string {
 	sort.Strings(keys)
 	parts := make([]string, len(keys))
 	for i, k := range keys {
-		if len(fieldsToIndex) > 0 && !slices.Contains(fieldsToIndex, k) {
+		if (len(fieldsToIndex) > 0 && !slices.Contains(fieldsToIndex, k)) || (len(except) > 0 && slices.Contains(except, k)) {
 			continue
 		}
 		switch val := rec[k].(type) {
@@ -71,8 +70,8 @@ func (rec GenericRecord) String(fieldsToIndex []string) string {
 	return strings.Join(parts, " ")
 }
 
-func (rec GenericRecord) getFrequency(fieldsToIndex []string) map[string]int {
-	combined := utils.ToLower(rec.String(fieldsToIndex))
+func (rec GenericRecord) getFrequency(fieldsToIndex []string, except []string) map[string]int {
+	combined := utils.ToLower(rec.String(fieldsToIndex, except))
 	tokens := utils.Tokenize(combined)
 	freq := make(map[string]int, len(tokens))
 	for _, t := range tokens {
@@ -101,16 +100,17 @@ type Index struct {
 	ID                 string
 	TotalDocs          int
 	AvgDocLength       float64
+	MemoryCapacity     int
+	NumWorkers         int
+	FieldsToIndex      []string
+	IndexFieldsExcept  []string
 	defaultSortField   *SortField
 	index              map[string][]Posting
 	docLength          map[int64]int
 	documents          *BPTree[int64, GenericRecord]
 	order              int
 	storage            string
-	cacheCapacity      int
 	indexingInProgress bool
-	numWorkers         int
-	fieldsToIndex      []string
 	searchCache        map[string]cacheEntry
 	cacheExpiry        time.Duration
 	reset              bool
@@ -125,13 +125,19 @@ type Options func(*Index)
 
 func WithNumOfWorkers(numOfWorkers int) Options {
 	return func(index *Index) {
-		index.numWorkers = numOfWorkers
+		index.NumWorkers = numOfWorkers
 	}
 }
 
 func WithFieldsToIndex(fieldsToIndex ...string) Options {
 	return func(index *Index) {
-		index.fieldsToIndex = fieldsToIndex
+		index.FieldsToIndex = fieldsToIndex
+	}
+}
+
+func WithIndexFieldsExcept(except ...string) Options {
+	return func(index *Index) {
+		index.IndexFieldsExcept = except
 	}
 }
 
@@ -149,7 +155,7 @@ func WithOrder(order int) Options {
 
 func WithCacheCapacity(capacity int) Options {
 	return func(index *Index) {
-		index.cacheCapacity = capacity
+		index.MemoryCapacity = capacity
 	}
 }
 
@@ -175,15 +181,15 @@ func NewIndex(id string, opts ...Options) *Index {
 	os.MkdirAll(DefaultPath, 0755)
 	storagePath := filepath.Join(DefaultPath, "storage-"+id+".dat")
 	index := &Index{
-		ID:            id,
-		numWorkers:    runtime.NumCPU(),
-		index:         make(map[string][]Posting),
-		docLength:     make(map[int64]int),
-		order:         3,
-		storage:       storagePath,
-		cacheCapacity: 1000,
-		searchCache:   make(map[string]cacheEntry),
-		cacheExpiry:   time.Minute,
+		ID:             id,
+		NumWorkers:     runtime.NumCPU(),
+		index:          make(map[string][]Posting),
+		docLength:      make(map[int64]int),
+		order:          3,
+		storage:        storagePath,
+		MemoryCapacity: 1000,
+		searchCache:    make(map[string]cacheEntry),
+		cacheExpiry:    time.Minute,
 	}
 	for _, opt := range opts {
 		opt(index)
@@ -191,7 +197,7 @@ func NewIndex(id string, opts ...Options) *Index {
 	if index.reset {
 		os.Remove(storagePath)
 	}
-	index.documents = NewBPTree[int64, GenericRecord](index.order, index.storage, index.cacheCapacity)
+	index.documents = NewBPTree[int64, GenericRecord](index.order, index.storage, index.MemoryCapacity)
 	index.startCacheCleanup()
 	return index
 }
@@ -277,7 +283,7 @@ func (index *Index) BuildFromReader(ctx context.Context, r io.Reader, callbacks 
 	jobs := make(chan GenericRecord, 500)
 	const flushThreshold = 100
 	var wg sync.WaitGroup
-	for w := 0; w < index.numWorkers; w++ {
+	for w := 0; w < index.NumWorkers; w++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
@@ -292,9 +298,9 @@ func (index *Index) BuildFromReader(ctx context.Context, r io.Reader, callbacks 
 					return
 				}
 				localID++
-				docID := wuid.New().Int64()
+				docID := utils.NewID().Int64()
 				partial.docs[docID] = rec
-				freq := rec.getFrequency(index.fieldsToIndex)
+				freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
 				docLen := 0
 				for term, cnt := range freq {
 					partial.inverted[term] = append(partial.inverted[term], Posting{DocID: docID, Frequency: cnt})
@@ -411,7 +417,7 @@ func (index *Index) BuildFromRecords(ctx context.Context, records any, callbacks
 	jobs := make(chan GenericRecord, 50)
 	const flushThreshold = 100
 	var wg sync.WaitGroup
-	for w := 0; w < index.numWorkers; w++ {
+	for w := 0; w < index.NumWorkers; w++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
@@ -426,9 +432,9 @@ func (index *Index) BuildFromRecords(ctx context.Context, records any, callbacks
 					break
 				}
 				localID++
-				docID := wuid.New().Int64()
+				docID := utils.NewID().Int64()
 				partial.docs[docID] = rec
-				freq := rec.getFrequency(index.fieldsToIndex)
+				freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
 				docLen := 0
 				for term, cnt := range freq {
 					partial.inverted[term] = append(partial.inverted[term], Posting{DocID: docID, Frequency: cnt})
@@ -706,7 +712,7 @@ func (index *Index) SearchScoreDocs(ctx context.Context, req Request) (Page, err
 		ch <- id
 	}
 	close(ch)
-	for i := 0; i < index.numWorkers; i++ {
+	for i := 0; i < index.NumWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -837,8 +843,8 @@ func smartPaginate(docs []ScoredDoc, page, perPage int) Page {
 func (index *Index) AddDocument(rec GenericRecord) {
 	index.Lock()
 	index.searchCache = make(map[string]cacheEntry)
-	docID := wuid.New().Int64()
-	freq := rec.getFrequency(index.fieldsToIndex)
+	docID := utils.NewID().Int64()
+	freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
 	index.indexDoc(docID, rec, freq)
 	index.TotalDocs++
 	index.update()
@@ -854,7 +860,7 @@ func (index *Index) UpdateDocument(docID int64, rec GenericRecord) error {
 		return fmt.Errorf("document %d does not exist", docID)
 	}
 
-	oldFreq := oldRec.getFrequency(index.fieldsToIndex)
+	oldFreq := oldRec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
 	for term := range oldFreq {
 		if postings, exists := index.index[term]; exists {
 			newPostings := postings[:0]
@@ -872,7 +878,7 @@ func (index *Index) UpdateDocument(docID int64, rec GenericRecord) error {
 		index.docLength[docID] -= oldFreq[term]
 	}
 	index.documents.Insert(docID, rec)
-	newFreq := rec.getFrequency(index.fieldsToIndex)
+	newFreq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
 	docLen := 0
 	for term, count := range newFreq {
 		docLen += count
@@ -892,7 +898,7 @@ func (index *Index) DeleteDocument(docID int64) error {
 		index.Unlock()
 		return fmt.Errorf("document %d does not exist", docID)
 	}
-	freq := rec.getFrequency(index.fieldsToIndex)
+	freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
 	for term := range freq {
 		if postings, exists := index.index[term]; exists {
 			newPostings := postings[:0]

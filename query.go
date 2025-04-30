@@ -159,7 +159,7 @@ func (pq PhraseQuery) Evaluate(index *Index) []int64 {
 				continue
 			}
 			// Use the document's string representation.
-			if strings.Contains(utils.ToLower(rec.String(index.fieldsToIndex)), queryLower) {
+			if strings.Contains(utils.ToLower(rec.String(index.FieldsToIndex, index.IndexFieldsExcept)), queryLower) {
 				filtered = append(filtered, docID)
 			}
 		}

@@ -6,7 +6,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/oarkflow/filters"
 	"github.com/oarkflow/squealx"
 	"github.com/oarkflow/squealx/connection"
 
@@ -31,7 +30,7 @@ func main() {
 		panic(err)
 	}
 	ctx := context.Background()
-	index := v1.NewIndex("test-filter", v1.WithFieldsToIndex("end_effective_date", "modifier", "provider_category", "charge_master_id", "work_item_id", "cpt_hcpcs_code", "client_proc_desc", "client_internal_code", "effective_date", "profee_type", "facility_type", "charge_type"))
+	index := v1.NewIndex("test-filter", v1.WithIndexFieldsExcept("is_active", "status", "created_by", "created_at", "updated_by", "updated_at", "deleted_at"))
 	query := "SELECT * FROM charge_master"
 	start := time.Now()
 	err = index.BuildFromDatabase(ctx, v1.DBRequest{DB: db, Query: query})
@@ -40,16 +39,8 @@ func main() {
 	}
 	fmt.Printf("Built index for %d docs in %s\n", index.TotalDocs, time.Since(start))
 	req := v1.Request{
-		Query: "ARTHROCENTESIS",
-		Exact: true,
-		Size:  10,
-		Filters: []v1.Filter{
-			{
-				Field:    "effective_date",
-				Operator: filters.Equal,
-				Value:    "2018-01-01",
-			},
-		},
+		Query:  "ARTHROCENTESIS",
+		Fields: []string{"client_hcpcs_code"},
 	}
 
 	searchStart := time.Now()
