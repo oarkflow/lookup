@@ -32,7 +32,8 @@ func NewTermQuery(term string, fuzzy bool, threshold int) TermQuery {
 func (tq TermQuery) Evaluate(index *Index) []int64 {
 	term := utils.ToLower(tq.Term)
 	if !tq.Fuzzy {
-		if postings, ok := index.index[term]; ok {
+		if val, ok := index.tokenTrie.Get(term); ok {
+			postings := val.([]Posting)
 			out := make([]int64, len(postings))
 			for i, p := range postings {
 				out[i] = p.DocID
@@ -46,7 +47,8 @@ func (tq TermQuery) Evaluate(index *Index) []int64 {
 	seen := map[int64]struct{}{}
 	var out []int64
 	for _, tok := range candidates {
-		if postings, ok := index.index[tok]; ok {
+		if val, ok := index.tokenTrie.Get(tok); ok {
+			postings := val.([]Posting)
 			for _, p := range postings {
 				if _, exists := seen[p.DocID]; !exists {
 					seen[p.DocID] = struct{}{}
@@ -108,7 +110,8 @@ func (pq PhraseQuery) Evaluate(index *Index) []int64 {
 			fuzzyTokens = append(fuzzyTokens, token)
 			set := make(map[int64]struct{})
 			for _, ft := range fuzzyTokens {
-				if postings, ok := index.index[ft]; ok {
+				if val, ok := index.tokenTrie.Get(ft); ok {
+					postings := val.([]Posting)
 					for _, p := range postings {
 						set[p.DocID] = struct{}{}
 					}
@@ -125,18 +128,18 @@ func (pq PhraseQuery) Evaluate(index *Index) []int64 {
 		}
 	} else {
 		for _, token := range tokens {
-			postings, ok := index.index[token]
-			if !ok {
+			if val, ok := index.tokenTrie.Get(token); ok {
+				postings := val.([]Posting)
+				var ids []int64
+				for _, p := range postings {
+					ids = append(ids, p.DocID)
+				}
+				lists = append(lists, ids)
+			} else {
 				return nil
 			}
-			var ids []int64
-			for _, p := range postings {
-				ids = append(ids, p.DocID)
-			}
-			lists = append(lists, ids)
 		}
 	}
-	// Intersect posting lists.
 	result := lists[0]
 	for i := 1; i < len(lists); i++ {
 		result = intersectSorted(result, lists[i])
@@ -144,12 +147,10 @@ func (pq PhraseQuery) Evaluate(index *Index) []int64 {
 			return nil
 		}
 	}
-	// Exact mode: filter results to ensure the document contains the exact phrase.
 	if !pq.Fuzzy {
 		queryLower := utils.ToLower(pq.Phrase)
 		var filtered []int64
 		for _, docID := range result {
-			// Retrieve the document from the BPTree. We assume GetDocument returns GenericRecord.
 			recRaw, ok := index.GetDocument(docID)
 			if !ok {
 				continue
@@ -158,7 +159,6 @@ func (pq PhraseQuery) Evaluate(index *Index) []int64 {
 			if !ok {
 				continue
 			}
-			// Use the document's string representation.
 			if strings.Contains(utils.ToLower(rec.String(index.FieldsToIndex, index.IndexFieldsExcept)), queryLower) {
 				filtered = append(filtered, docID)
 			}

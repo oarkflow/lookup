@@ -22,6 +22,7 @@ import (
 	"github.com/oarkflow/json"
 	"github.com/oarkflow/squealx"
 
+	"github.com/oarkflow/lookup/trie"
 	"github.com/oarkflow/lookup/utils"
 )
 
@@ -105,7 +106,7 @@ type Index struct {
 	FieldsToIndex      []string
 	IndexFieldsExcept  []string
 	defaultSortField   *SortField
-	index              map[string][]Posting
+	tokenTrie          *trie.Trie // replaced index map with trie
 	docLength          map[int64]int
 	documents          *BPTree[int64, GenericRecord]
 	order              int
@@ -183,7 +184,7 @@ func NewIndex(id string, opts ...Options) *Index {
 	index := &Index{
 		ID:             id,
 		NumWorkers:     runtime.NumCPU(),
-		index:          make(map[string][]Posting),
+		tokenTrie:      trie.NewTrie(), // use trie for token postings
 		docLength:      make(map[int64]int),
 		order:          3,
 		storage:        storagePath,
@@ -206,11 +207,11 @@ func (index *Index) FuzzySearch(term string, threshold int) []string {
 	index.RLock()
 	defer index.RUnlock()
 	var results []string
-	for token := range index.index {
-		if utils.BoundedLevenshtein(term, token, threshold) <= threshold {
-			results = append(results, token)
+	index.tokenTrie.Traverse(func(key string, value any) {
+		if utils.BoundedLevenshtein(term, key, threshold) <= threshold {
+			results = append(results, key)
 		}
-	}
+	})
 	return results
 }
 
@@ -229,8 +230,14 @@ func (index *Index) mergePartial(partial partialIndex) {
 	for id, length := range partial.lengths {
 		index.docLength[id] = length
 	}
+	// merge postings from partial.inverted into tokenTrie
 	for term, postings := range partial.inverted {
-		index.index[term] = append(index.index[term], postings...)
+		var existing []Posting
+		if val, ok := index.tokenTrie.Get(term); ok {
+			existing = val.([]Posting)
+		}
+		existing = append(existing, postings...)
+		index.tokenTrie.Insert(term, existing)
 	}
 	index.TotalDocs += partial.totalDocs
 	index.Unlock()
@@ -354,7 +361,8 @@ func (index *Index) BuildFromReader(ctx context.Context, r io.Reader, callbacks 
 func (index *Index) Evaluate(tokens []string) []int64 {
 	var docSet []int64
 	for _, token := range tokens {
-		if postings, ok := index.index[token]; ok {
+		if val, ok := index.tokenTrie.Get(token); ok {
+			postings := val.([]Posting)
 			for _, p := range postings {
 				docSet = append(docSet, p.DocID)
 			}
@@ -513,8 +521,15 @@ func (index *Index) indexDoc(docID int64, rec GenericRecord, freq map[string]int
 	index.documents.Insert(docID, rec)
 	docLen := 0
 	for t, count := range freq {
-		index.index[t] = append(index.index[t], Posting{DocID: docID, Frequency: count})
-		docLen += count
+		val, ok := index.tokenTrie.Get(t)
+		if ok {
+			postings, can := val.([]Posting)
+			if can {
+				index.tokenTrie.Insert(t, append(postings, Posting{DocID: docID, Frequency: count}))
+				docLen += count
+			}
+		}
+
 	}
 	index.docLength[docID] = docLen
 }
@@ -537,10 +552,11 @@ func (index *Index) bm25Score(queryTokens []string, docID int64, k1, b float64) 
 	score := 0.0
 	docLength := float64(index.docLength[docID])
 	for _, term := range queryTokens {
-		postings, ok := index.index[term]
+		val, ok := index.tokenTrie.Get(term)
 		if !ok {
 			continue
 		}
+		postings := val.([]Posting)
 		df := float64(len(postings))
 		var tf int
 		for _, p := range postings {
@@ -845,6 +861,15 @@ func (index *Index) AddDocument(rec GenericRecord) {
 	index.searchCache = make(map[string]cacheEntry)
 	docID := utils.NewID().Int64()
 	freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
+	// insert each token posting into trie
+	for term, count := range freq {
+		var existing []Posting
+		if val, ok := index.tokenTrie.Get(term); ok {
+			existing = val.([]Posting)
+		}
+		existing = append(existing, Posting{DocID: docID, Frequency: count})
+		index.tokenTrie.Insert(term, existing)
+	}
 	index.indexDoc(docID, rec, freq)
 	index.TotalDocs++
 	index.update()
@@ -861,28 +886,31 @@ func (index *Index) UpdateDocument(docID int64, rec GenericRecord) error {
 	}
 
 	oldFreq := oldRec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
-	for term := range oldFreq {
-		if postings, exists := index.index[term]; exists {
+	// remove old postings from trie
+	for term, oldCount := range oldFreq {
+		if val, ok := index.tokenTrie.Get(term); ok {
+			postings := val.([]Posting)
 			newPostings := postings[:0]
 			for _, p := range postings {
 				if p.DocID != docID {
 					newPostings = append(newPostings, p)
 				}
 			}
-			if len(newPostings) == 0 {
-				delete(index.index, term)
-			} else {
-				index.index[term] = newPostings
-			}
+			index.tokenTrie.Insert(term, newPostings)
+			index.docLength[docID] -= oldCount
 		}
-		index.docLength[docID] -= oldFreq[term]
 	}
 	index.documents.Insert(docID, rec)
 	newFreq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
 	docLen := 0
 	for term, count := range newFreq {
 		docLen += count
-		index.index[term] = append(index.index[term], Posting{DocID: docID, Frequency: count})
+		var existing []Posting
+		if val, ok := index.tokenTrie.Get(term); ok {
+			existing = val.([]Posting)
+		}
+		existing = append(existing, Posting{DocID: docID, Frequency: count})
+		index.tokenTrie.Insert(term, existing)
 	}
 	index.docLength[docID] = docLen
 	index.update()
@@ -900,18 +928,15 @@ func (index *Index) DeleteDocument(docID int64) error {
 	}
 	freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
 	for term := range freq {
-		if postings, exists := index.index[term]; exists {
+		if val, ok := index.tokenTrie.Get(term); ok {
+			postings := val.([]Posting)
 			newPostings := postings[:0]
 			for _, p := range postings {
 				if p.DocID != docID {
 					newPostings = append(newPostings, p)
 				}
 			}
-			if len(newPostings) == 0 {
-				delete(index.index, term)
-			} else {
-				index.index[term] = newPostings
-			}
+			index.tokenTrie.Insert(term, newPostings)
 		}
 	}
 	index.documents.Delete(docID)
