@@ -114,6 +114,7 @@ type Index struct {
 	searchCache        map[string]cacheEntry
 	cacheExpiry        time.Duration
 	reset              bool
+	addDocChan         chan GenericRecord // new channel for individual document additions
 }
 
 type IndexRequest struct {
@@ -198,6 +199,11 @@ func NewIndex(id string, opts ...Options) *Index {
 		os.Remove(storagePath)
 	}
 	index.documents = NewBPTree[int64, GenericRecord](index.order, index.storage, index.MemoryCapacity)
+
+	// Initialize channel and background worker for AddDocument batching
+	index.addDocChan = make(chan GenericRecord, 100)
+	go index.processAddDocLoop()
+
 	index.startCacheCleanup()
 	return index
 }
@@ -212,6 +218,62 @@ func (index *Index) FuzzySearch(term string, threshold int) []string {
 		}
 	}
 	return results
+}
+
+// New helper function: processAddDocLoop batches individual docs
+func (index *Index) processAddDocLoop() {
+	flushThreshold := 100
+	batch := make([]GenericRecord, 0, flushThreshold)
+	ticker := time.NewTicker(500 * time.Millisecond) // flush periodically
+	defer ticker.Stop()
+	for {
+		select {
+		case rec, ok := <-index.addDocChan:
+			if !ok {
+				if len(batch) > 0 {
+					index.processBatch(batch)
+				}
+				return
+			}
+			batch = append(batch, rec)
+			if len(batch) >= flushThreshold {
+				index.processBatch(batch)
+				batch = batch[:0]
+			}
+		case <-ticker.C:
+			if len(batch) > 0 {
+				index.processBatch(batch)
+				batch = batch[:0]
+			}
+		}
+	}
+}
+
+// Helper function to merge a batch of documents
+func (index *Index) processBatch(recs []GenericRecord) {
+	partial := partialIndex{
+		docs:     make(map[int64]GenericRecord),
+		lengths:  make(map[int64]int),
+		inverted: make(map[string][]Posting),
+	}
+	for _, rec := range recs {
+		docID := utils.NewID().Int64()
+		freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
+		partial.docs[docID] = rec
+		docLen := 0
+		for term, count := range freq {
+			partial.inverted[term] = append(partial.inverted[term], Posting{DocID: docID, Frequency: count})
+			docLen += count
+		}
+		partial.lengths[docID] = docLen
+		partial.totalDocs++
+	}
+	index.mergePartial(partial)
+}
+
+// Updated AddDocument that pushes docs to the channel for batching
+func (index *Index) AddDocument(rec GenericRecord) {
+	index.addDocChan <- rec
 }
 
 type partialIndex struct {
@@ -837,17 +899,6 @@ func smartPaginate(docs []ScoredDoc, page, perPage int) Page {
 		NextPage:   next,
 		PrevPage:   prev,
 	}
-}
-
-func (index *Index) AddDocument(rec GenericRecord) {
-	index.Lock()
-	index.searchCache = make(map[string]cacheEntry)
-	docID := utils.NewID().Int64()
-	freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
-	index.indexDoc(docID, rec, freq)
-	index.TotalDocs++
-	index.update()
-	index.Unlock()
 }
 
 func (index *Index) UpdateDocument(docID int64, rec GenericRecord) error {

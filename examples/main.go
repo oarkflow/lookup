@@ -33,7 +33,11 @@ func main() {
 	index := v1.NewIndex("test-filter", v1.WithIndexFieldsExcept("is_active", "status", "created_by", "created_at", "updated_by", "updated_at", "deleted_at"))
 	query := "SELECT * FROM charge_master"
 	start := time.Now()
-	err = index.BuildFromDatabase(ctx, v1.DBRequest{DB: db, Query: query})
+	err = squealx.SelectEach[map[string]any](db, func(row map[string]any) error {
+		index.AddDocument(row)
+		return nil
+	}, query)
+	// err = index.BuildFromDatabase(ctx, v1.DBRequest{DB: db, Query: query})
 	if err != nil {
 		log.Fatalf("index build error: %v", err)
 	}
