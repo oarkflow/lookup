@@ -528,7 +528,6 @@ func (index *Index) update() {
 		index.AvgDocLength = float64(total) / float64(index.TotalDocs)
 	}
 	index.indexingInProgress = false
-	log.Println(fmt.Sprintf("Indexing completed for %s", index.ID))
 }
 
 func (index *Index) bm25Score(queryTokens []string, docID int64, k1, b float64) float64 {

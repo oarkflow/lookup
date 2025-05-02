@@ -39,8 +39,7 @@ func main() {
 	}
 	fmt.Printf("Built index for %d docs in %s\n", index.TotalDocs, time.Since(start))
 	req := v1.Request{
-		Query:  "ARTHROCENTESIS",
-		Fields: []string{"client_hcpcs_code"},
+		Query: "ARTHROCENTESIS",
 	}
 
 	searchStart := time.Now()

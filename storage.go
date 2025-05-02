@@ -2,7 +2,6 @@ package lookup
 
 import (
 	"container/list"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +10,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/oarkflow/json"
 
 	"github.com/oarkflow/lookup/utils"
 )
@@ -460,7 +461,7 @@ func StoreFromJSON(tree *BPTree[string, map[string]any], file string, keyField s
 	if err != nil {
 		return err
 	}
-	var records []map[string]interface{}
+	var records []map[string]any
 	if err := json.Unmarshal(data, &records); err != nil {
 		return err
 	}
