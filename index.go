@@ -199,11 +199,8 @@ func NewIndex(id string, opts ...Options) *Index {
 		os.Remove(storagePath)
 	}
 	index.documents = NewBPTree[int64, GenericRecord](index.order, index.storage, index.MemoryCapacity)
-
-	// Initialize channel and background worker for AddDocument batching
 	index.addDocChan = make(chan GenericRecord, 100)
 	go index.processAddDocLoop()
-
 	index.startCacheCleanup()
 	return index
 }
@@ -271,7 +268,7 @@ func (index *Index) processBatch(recs []GenericRecord) {
 	index.mergePartial(partial)
 }
 
-// Updated AddDocument that pushes docs to the channel for batching
+// AddDocument that pushes docs to the channel for batching
 func (index *Index) AddDocument(rec GenericRecord) {
 	index.addDocChan <- rec
 }
