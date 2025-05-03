@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"math"
+	"net"
+	"net/rpc"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -115,6 +117,8 @@ type Index struct {
 	cacheExpiry        time.Duration
 	reset              bool
 	addDocChan         chan GenericRecord // new channel for individual document additions
+	Distributed        bool
+	Peers              []string
 }
 
 type IndexRequest struct {
@@ -178,17 +182,29 @@ func WithCacheExpiry(dur time.Duration) Options {
 	}
 }
 
+func WithDistributed() Options {
+	return func(index *Index) {
+		index.Distributed = true
+	}
+}
+
+func WithPeers(peers ...string) Options {
+	return func(index *Index) {
+		index.Peers = peers
+	}
+}
+
 func NewIndex(id string, opts ...Options) *Index {
 	os.MkdirAll(DefaultPath, 0755)
 	storagePath := filepath.Join(DefaultPath, "storage-"+id+".dat")
 	index := &Index{
 		ID:             id,
-		NumWorkers:     runtime.NumCPU(),
+		NumWorkers:     runtime.NumCPU(), // will be overridden if WithNumOfWorkers is set
 		index:          make(map[string][]Posting),
 		docLength:      make(map[int64]int),
 		order:          3,
 		storage:        storagePath,
-		MemoryCapacity: 1000,
+		MemoryCapacity: 1000, // will be overridden if WithCacheCapacity is set
 		searchCache:    make(map[string]cacheEntry),
 		cacheExpiry:    time.Minute,
 	}
@@ -271,6 +287,9 @@ func (index *Index) processBatch(recs []GenericRecord) {
 // AddDocument that pushes docs to the channel for batching
 func (index *Index) AddDocument(rec GenericRecord) {
 	index.addDocChan <- rec
+	if index.Distributed {
+		go index.distributedAddDocument(rec)
+	}
 }
 
 type partialIndex struct {
@@ -638,6 +657,9 @@ type SearchParams struct {
 }
 
 func (index *Index) Search(ctx context.Context, req Request) (*Result, error) {
+	if index.Distributed {
+		return index.distributedSearch(ctx, req)
+	}
 	results, err := index.SearchScoreDocs(ctx, req)
 	if err != nil {
 		return nil, err
@@ -662,6 +684,74 @@ func (index *Index) Search(ctx context.Context, req Request) (*Result, error) {
 		PrevPage:   results.PrevPage,
 	}
 	return pagedData, nil
+}
+
+// Modified distributedSearch function with dial timeouts and shorter overall timeout.
+func (index *Index) distributedSearch(ctx context.Context, req Request) (*Result, error) {
+	localPage, err := index.SearchScoreDocs(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	allScores := localPage.Results
+	var wg sync.WaitGroup
+	resultCh := make(chan []ScoredDoc, len(index.Peers))
+	peerTimeout := 500 * time.Millisecond // reduced per-peer dial timeout
+
+	for _, peer := range index.Peers {
+		wg.Add(1)
+		go func(peerAddr string) {
+			defer wg.Done()
+			// Use DialTimeout instead of rpc.Dial.
+			conn, err := net.DialTimeout("tcp", peerAddr, peerTimeout)
+			if err != nil {
+				return
+			}
+			client := rpc.NewClient(conn)
+			defer client.Close()
+			var reply RPCSearchResponse
+			rpcReq := &RPCSearchRequest{Req: req}
+			if err := client.Call("RPCServer.SearchRPC", rpcReq, &reply); err == nil {
+				resultCh <- reply.Page.Results
+			}
+		}(peer)
+	}
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+	// Reduce overall wait to 1 second.
+	collectTimeout := time.After(1 * time.Second)
+	for {
+		select {
+		case res, ok := <-resultCh:
+			if !ok {
+				goto DONE
+			}
+			allScores = append(allScores, res...)
+		case <-collectTimeout:
+			goto DONE
+		}
+	}
+DONE:
+	sort.Slice(allScores, func(i, j int) bool { return allScores[i].Score > allScores[j].Score })
+	mergedPage := smartPaginate(allScores, req.Page, req.Size)
+	var records []GenericRecord
+	for _, sd := range mergedPage.Results {
+		if rec, ok := index.GetDocument(sd.DocID); ok {
+			if record, ok := rec.(GenericRecord); ok {
+				records = append(records, record)
+			}
+		}
+	}
+	return &Result{
+		Items:      records,
+		Total:      mergedPage.Total,
+		Page:       mergedPage.Page,
+		PerPage:    mergedPage.PerPage,
+		TotalPages: mergedPage.TotalPages,
+		NextPage:   mergedPage.NextPage,
+		PrevPage:   mergedPage.PrevPage,
+	}, nil
 }
 
 func (index *Index) SearchScoreDocs(ctx context.Context, req Request) (Page, error) {
@@ -995,4 +1085,56 @@ func (index *Index) startCacheCleanup() {
 			index.Unlock()
 		}
 	}()
+}
+
+// RPC types for distributed add and search.
+type RPCAddRequest struct {
+	Record GenericRecord
+}
+
+type RPCAddResponse struct{}
+
+type RPCSearchRequest struct {
+	Req Request
+}
+
+type RPCSearchResponse struct {
+	Page Page
+}
+
+// RPCServer exposes Index methods over RPC.
+type RPCServer struct {
+	Index *Index
+}
+
+func (s *RPCServer) AddDocumentRPC(args *RPCAddRequest, reply *RPCAddResponse) error {
+	s.Index.AddDocument(args.Record)
+	return nil
+}
+
+func (s *RPCServer) SearchRPC(args *RPCSearchRequest, reply *RPCSearchResponse) error {
+	page, err := s.Index.SearchScoreDocs(context.Background(), args.Req)
+	if err != nil {
+		return err
+	}
+	reply.Page = page
+	return nil
+}
+
+// Modified distributedAddDocument with dial timeout.
+func (index *Index) distributedAddDocument(rec GenericRecord) {
+	req := &RPCAddRequest{Record: rec}
+	timeout := 1 * time.Second
+	for _, peer := range index.Peers {
+		go func(peerAddr string) {
+			conn, err := net.DialTimeout("tcp", peerAddr, timeout)
+			if err != nil {
+				return
+			}
+			client := rpc.NewClient(conn)
+			defer client.Close()
+			var reply RPCAddResponse
+			_ = client.Call("RPCServer.AddDocumentRPC", req, &reply)
+		}(peer)
+	}
 }

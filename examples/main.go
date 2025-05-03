@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
+	"net/rpc"
 	"time"
 
 	"github.com/oarkflow/squealx"
@@ -18,6 +20,8 @@ func mai1n() {
 }
 
 func main() {
+	log.Println("Starting main function")
+
 	db, _, err := connection.FromConfig(squealx.Config{
 		Host:     "localhost",
 		Port:     5432,
@@ -29,28 +33,51 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
 	ctx := context.Background()
-	index := v1.NewIndex("test-filter", v1.WithIndexFieldsExcept("is_active", "status", "created_by", "created_at", "updated_by", "updated_at", "deleted_at"))
+	// Create index with increased workers and cache capacity.
+	index := v1.NewIndex("test-filter",
+		v1.WithIndexFieldsExcept("is_active", "status", "created_by", "created_at", "updated_by", "updated_at", "deleted_at"),
+	)
+
+	// Register RPC service for distributed add/search.
+	rpcServer := &v1.RPCServer{Index: index}
+	if err := rpc.Register(rpcServer); err != nil {
+		log.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", ":8082") // adjust port to this node's TCP address
+	if err != nil {
+		log.Fatal(err)
+	}
+	go rpc.Accept(listener)
+	log.Println("RPC server started on :8082")
+
+	// Build index from database.
 	query := "SELECT * FROM charge_master"
+	log.Println("Starting index build from DB...")
 	start := time.Now()
-	err = squealx.SelectEach[map[string]any](db, func(row map[string]any) error {
+	err = squealx.SelectEach(db, func(row map[string]any) error {
 		index.AddDocument(row)
 		return nil
 	}, query)
-	// err = index.BuildFromDatabase(ctx, v1.DBRequest{DB: db, Query: query})
 	if err != nil {
 		log.Fatalf("index build error: %v", err)
 	}
-	fmt.Printf("Built index for %d docs in %s\n", index.TotalDocs, time.Since(start))
-	req := v1.Request{
-		Query: "ARTHROCENTESIS",
-	}
+	log.Printf("Built index for %d docs in %s\n", index.TotalDocs, time.Since(start))
 
+	req := v1.Request{
+		Query: "RECENT",
+		Page:  1,
+		Size:  10,
+	}
+	log.Println("Performing search...")
 	searchStart := time.Now()
 	page, err := index.Search(ctx, req)
 	if err != nil {
 		log.Fatalf("Search error: %v", err)
 	}
-	fmt.Printf("Found %d docs (page %d/%d) in %s\n", page.Total, page.Page, page.TotalPages, time.Since(searchStart))
+	log.Printf("Found %d docs (page %d/%d) in %s\n", page.Total, page.Page, page.TotalPages, time.Since(searchStart))
 	fmt.Println(fmt.Sprintf("%+v", page.Items))
+
+	log.Println("Main function completed")
 }
