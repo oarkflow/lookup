@@ -172,6 +172,26 @@ func (pq PhraseQuery) Tokens() []string {
 	return utils.Tokenize(utils.ToLower(pq.Phrase))
 }
 
+type FieldQuery struct {
+	Field string
+	Value string
+}
+
+func (fq FieldQuery) Evaluate(index *Index) []int64 {
+	var result []int64
+	index.documents.ForEach(func(docID int64, rec GenericRecord) bool {
+		if val, ok := rec[fq.Field]; ok && utils.ToString(val) == fq.Value {
+			result = append(result, docID)
+		}
+		return true
+	})
+	return result
+}
+
+func (fq FieldQuery) Tokens() []string {
+	return []string{utils.ToLower(fq.Value)}
+}
+
 type WildcardQuery struct {
 	Field   string
 	Pattern string
@@ -181,6 +201,7 @@ func (wq WildcardQuery) Evaluate(index *Index) []int64 {
 	var result []int64
 	regexPattern := "^" + regexp.QuoteMeta(wq.Pattern) + "$"
 	regexPattern = strings.ReplaceAll(regexPattern, "\\*", ".*")
+	regexPattern = strings.ReplaceAll(regexPattern, "\\?", ".")
 	re, err := regexp.Compile(regexPattern)
 	if err != nil {
 		return result

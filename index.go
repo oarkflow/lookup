@@ -74,7 +74,10 @@ func (rec GenericRecord) String(fieldsToIndex []string, except []string) string 
 
 func (rec GenericRecord) getFrequency(fieldsToIndex []string, except []string) map[string]int {
 	combined := utils.ToLower(rec.String(fieldsToIndex, except))
-	tokens := utils.Tokenize(combined)
+	var tokens []string
+	// Example: switch to Unicode tokenization if needed
+	// tokens = utils.TokenizeUnicode(combined)
+	tokens = utils.Tokenize(combined)
 	freq := make(map[string]int, len(tokens))
 	for _, t := range tokens {
 		freq[t]++
@@ -119,6 +122,8 @@ type Index struct {
 	addDocChan         chan GenericRecord // new channel for individual document additions
 	Distributed        bool
 	Peers              []string
+	DocIDField         string        // enhancement: allow custom doc ID field
+	closed             chan struct{} // enhancement: for graceful shutdown
 }
 
 type IndexRequest struct {
@@ -194,6 +199,13 @@ func WithPeers(peers ...string) Options {
 	}
 }
 
+// Option to set custom doc ID field
+func WithDocIDField(field string) Options {
+	return func(index *Index) {
+		index.DocIDField = field
+	}
+}
+
 func NewIndex(id string, opts ...Options) *Index {
 	os.MkdirAll(DefaultPath, 0755)
 	storagePath := filepath.Join(DefaultPath, "storage-"+id+".dat")
@@ -207,6 +219,7 @@ func NewIndex(id string, opts ...Options) *Index {
 		MemoryCapacity: 1000, // will be overridden if WithCacheCapacity is set
 		searchCache:    make(map[string]cacheEntry),
 		cacheExpiry:    time.Minute,
+		closed:         make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(index)
@@ -219,6 +232,13 @@ func NewIndex(id string, opts ...Options) *Index {
 	go index.processAddDocLoop()
 	index.startCacheCleanup()
 	return index
+}
+
+// Enhancement: Close method to shut down goroutines
+func (index *Index) Close() error {
+	close(index.addDocChan)
+	close(index.closed)
+	return index.documents.Close()
 }
 
 func (index *Index) FuzzySearch(term string, threshold int) []string {
@@ -262,6 +282,18 @@ func (index *Index) processAddDocLoop() {
 	}
 }
 
+// Helper function to extract or generate docID
+func (index *Index) extractDocID(rec GenericRecord) int64 {
+	if index.DocIDField != "" {
+		if v, ok := rec[index.DocIDField]; ok {
+			if id, err := strconv.ParseInt(utils.ToString(v), 10, 64); err == nil {
+				return id
+			}
+		}
+	}
+	return utils.NewID().Int64()
+}
+
 // Helper function to merge a batch of documents
 func (index *Index) processBatch(recs []GenericRecord) {
 	partial := partialIndex{
@@ -270,7 +302,7 @@ func (index *Index) processBatch(recs []GenericRecord) {
 		inverted: make(map[string][]Posting),
 	}
 	for _, rec := range recs {
-		docID := utils.NewID().Int64()
+		docID := index.extractDocID(rec) // enhancement: use custom docID
 		freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
 		partial.docs[docID] = rec
 		docLen := 0
@@ -873,11 +905,20 @@ func (index *Index) SearchScoreDocs(ctx context.Context, req Request) (Page, err
 				score := index.bm25Score(queryTokens, docID, bm25.K, bm25.B)
 				mu.Lock()
 				scored = append(scored, ScoredDoc{DocID: docID, Score: score})
+				// Early return: if we have enough results for the requested page, return immediately.
+				if len(scored) == perPage {
+					mu.Unlock()
+					return
+				}
 				mu.Unlock()
 			}
 		}()
 	}
 	wg.Wait()
+	// Early return: if we have exactly perPage results, skip sorting/pagination.
+	if len(scored) == perPage {
+		return smartPaginate(scored, page, perPage), nil
+	}
 	if len(params.SortFields) > 0 {
 		index.sortData(scored, params.SortFields)
 	} else {
@@ -903,8 +944,8 @@ func (index *Index) sortData(scored []ScoredDoc, fields []SortField) {
 			if !okI || !okJ {
 				continue
 			}
-			cmp := utils.Compare(valI, valJ)
-			if cmp == 0 {
+			cmp, err := utils.Compare(valI, valJ)
+			if cmp == 0 || err != nil {
 				continue
 			}
 			if field.Descending {
@@ -1136,5 +1177,60 @@ func (index *Index) distributedAddDocument(rec GenericRecord) {
 			var reply RPCAddResponse
 			_ = client.Call("RPCServer.AddDocumentRPC", req, &reply)
 		}(peer)
+	}
+}
+
+type indexPersistence struct {
+	Index     map[string][]Posting `json:"index"`
+	DocLength map[int64]int        `json:"doc_length"`
+	TotalDocs int                  `json:"total_docs"`
+}
+
+// Enhancement: Serialization/deserialization for persistence
+func (index *Index) SaveToDisk(path string) error {
+	index.RLock()
+	defer index.RUnlock()
+	data := indexPersistence{
+		Index:     index.index,
+		DocLength: index.docLength,
+		TotalDocs: index.TotalDocs,
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	return enc.Encode(&data)
+}
+
+func (index *Index) LoadFromDisk(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var data indexPersistence
+	dec := json.NewDecoder(f)
+	if err := dec.Decode(&data); err != nil {
+		return err
+	}
+	index.Lock()
+	index.index = data.Index
+	index.docLength = data.DocLength
+	index.TotalDocs = data.TotalDocs
+	index.Unlock()
+	return nil
+}
+
+// Enhancement: Status/progress API stub
+func (index *Index) Status() map[string]any {
+	index.RLock()
+	defer index.RUnlock()
+	return map[string]any{
+		"total_docs":           index.TotalDocs,
+		"avg_doc_length":       index.AvgDocLength,
+		"indexing_in_progress": index.indexingInProgress,
 	}
 }

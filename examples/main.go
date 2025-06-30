@@ -37,7 +37,7 @@ func main() {
 	ctx := context.Background()
 	// Create index with increased workers and cache capacity.
 	index := v1.NewIndex("test-filter",
-		v1.WithIndexFieldsExcept("is_active", "status", "created_by", "created_at", "updated_by", "updated_at", "deleted_at"),
+		v1.WithIndexFieldsExcept("is_active", "created_by", "created_at", "updated_by", "updated_at", "deleted_at"),
 	)
 
 	// Register RPC service for distributed add/search.
@@ -68,7 +68,7 @@ func main() {
 	req := v1.Request{
 		Query: "RECENT",
 		Page:  1,
-		Size:  10,
+		Size:  2,
 	}
 	log.Println("Performing search...")
 	searchStart := time.Now()
@@ -77,7 +77,21 @@ func main() {
 		log.Fatalf("Search error: %v", err)
 	}
 	log.Printf("Found %d docs (page %d/%d) in %s\n", page.Total, page.Page, page.TotalPages, time.Since(searchStart))
-	fmt.Println(fmt.Sprintf("%+v", page.Items))
+	fmt.Printf("%+v", page.Items)
+
+	// Example: Search by field using filters
+	req2 := v1.Request{
+		Filters: []v1.Filter{
+			{Field: "status", Operator: "=", Value: "ACTIVE"},
+		},
+		Page: 1,
+		Size: 5,
+	}
+	page2, err := index.Search(ctx, req2)
+	if err != nil {
+		log.Printf("Field search error: %v", err)
+	}
+	fmt.Println("Field search results:", page2.Items)
 
 	log.Println("Main function completed")
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"reflect"
 	"slices"
 	"sort"
@@ -85,7 +86,15 @@ func (m *Manager) Search(ctx context.Context, name string, req Request) (*Result
 }
 
 type NewIndexRequest struct {
-	ID string `json:"id"`
+	ID          string   `json:"id"`
+	DocIDField  string   `json:"doc_id_field,omitempty"`
+	Except      []string `json:"except,omitempty"`
+	Fields      []string `json:"fields,omitempty"`
+	Workers     int      `json:"workers,omitempty"`
+	Cache       int      `json:"cache,omitempty"`
+	Order       int      `json:"order,omitempty"`
+	Distributed bool     `json:"distributed,omitempty"`
+	Peers       []string `json:"peers,omitempty"`
 }
 
 type Filter struct {
@@ -246,7 +255,32 @@ func (m *Manager) StartHTTP(addr string) {
 			http.Error(w, "index ID required in request body", http.StatusBadRequest)
 			return
 		}
-		index := NewIndex(req.ID)
+		opts := []Options{}
+		if req.DocIDField != "" {
+			opts = append(opts, WithDocIDField(req.DocIDField))
+		}
+		if len(req.Except) > 0 {
+			opts = append(opts, WithIndexFieldsExcept(req.Except...))
+		}
+		if len(req.Fields) > 0 {
+			opts = append(opts, WithFieldsToIndex(req.Fields...))
+		}
+		if req.Workers > 0 {
+			opts = append(opts, WithNumOfWorkers(req.Workers))
+		}
+		if req.Cache > 0 {
+			opts = append(opts, WithCacheCapacity(req.Cache))
+		}
+		if req.Order > 0 {
+			opts = append(opts, WithOrder(req.Order))
+		}
+		if req.Distributed {
+			opts = append(opts, WithDistributed())
+		}
+		if len(req.Peers) > 0 {
+			opts = append(opts, WithPeers(req.Peers...))
+		}
+		index := NewIndex(req.ID, opts...)
 		m.AddIndex(req.ID, index)
 		_, _ = w.Write([]byte(fmt.Sprintf("index %s created successfully", req.ID)))
 	})
@@ -319,6 +353,95 @@ func (m *Manager) StartHTTP(addr string) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(results)
+	})
+
+	// Enhancement: Update document endpoint
+	http.HandleFunc("/{index}/update", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Unsupported method", http.StatusMethodNotAllowed)
+			return
+		}
+		indexName := r.PathValue("index")
+		if strings.TrimSpace(indexName) == "" {
+			http.Error(w, "index name required in path", http.StatusBadRequest)
+			return
+		}
+		var payload struct {
+			DocID int64         `json:"doc_id"`
+			Doc   GenericRecord `json:"doc"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+		idx, ok := m.GetIndex(indexName)
+		if !ok {
+			http.Error(w, "index not found", http.StatusNotFound)
+			return
+		}
+		if err := idx.UpdateDocument(payload.DocID, payload.Doc); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte("document updated"))
+	})
+
+	// Enhancement: Delete document endpoint
+	http.HandleFunc("/{index}/delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Unsupported method", http.StatusMethodNotAllowed)
+			return
+		}
+		indexName := r.PathValue("index")
+		if strings.TrimSpace(indexName) == "" {
+			http.Error(w, "index name required in path", http.StatusBadRequest)
+			return
+		}
+		var payload struct {
+			DocID int64 `json:"doc_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+		idx, ok := m.GetIndex(indexName)
+		if !ok {
+			http.Error(w, "index not found", http.StatusNotFound)
+			return
+		}
+		if err := idx.DeleteDocument(payload.DocID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte("document deleted"))
+	})
+
+	// Enhancement: Index status endpoint
+	http.HandleFunc("/{index}/status", func(w http.ResponseWriter, r *http.Request) {
+		indexName := r.PathValue("index")
+		if strings.TrimSpace(indexName) == "" {
+			http.Error(w, "index name required in path", http.StatusBadRequest)
+			return
+		}
+		idx, ok := m.GetIndex(indexName)
+		if !ok {
+			http.Error(w, "index not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(idx.Status())
+	})
+
+	// Enhancement: Shutdown endpoint
+	http.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		for _, idx := range m.indexes {
+			_ = idx.Close()
+		}
+		w.Write([]byte("All indexes closed."))
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			os.Exit(0)
+		}()
 	})
 
 	log.Printf("HTTP server listening on %s", addr)

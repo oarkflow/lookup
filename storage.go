@@ -37,10 +37,11 @@ type KVPair[K Ordered, V any] struct {
 }
 
 type LRUCache[K comparable, V any] struct {
-	capacity int
-	cache    map[K]*list.Element
-	ll       *list.List
-	mu       sync.Mutex
+	capacity      int
+	cache         map[K]*list.Element
+	ll            *list.List
+	mu            sync.Mutex
+	EnableLogging bool // enhancement: toggle logging
 }
 
 type entry[K comparable, V any] struct {
@@ -61,7 +62,9 @@ func (l *LRUCache[K, V]) Get(key K) (V, bool) {
 	defer l.mu.Unlock()
 	if ele, ok := l.cache[key]; ok {
 		l.ll.MoveToFront(ele)
-		log.Printf("LRUCache: Accessed key %v", key)
+		if l.EnableLogging {
+			log.Printf("LRUCache: Accessed key %v", key)
+		}
 		return ele.Value.(entry[K, V]).value, true
 	}
 	var zero V
@@ -384,6 +387,8 @@ func (t *BPTree[K, V]) rebalance(parent, child *node[K, V], idx int) {
 		parent.children = append(parent.children[:idx+1], parent.children[idx+2:]...)
 	}
 }
+
+// TODO: Add full index persistence (inverted index, doc lengths, etc.) for durability.
 
 func (t *BPTree[K, V]) ForEach(fn func(key K, value V) bool) {
 	t.mu.RLock()

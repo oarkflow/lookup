@@ -225,6 +225,26 @@ func Tokenize(text string) []string {
 	return tokens
 }
 
+// TokenizeUnicode tokenizes a string using Unicode-aware rules (letters, digits, underscores).
+func TokenizeUnicode(text string) []string {
+	var tokens []string
+	var sb strings.Builder
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
+			sb.WriteRune(unicode.ToLower(r))
+		} else {
+			if sb.Len() > 0 {
+				tokens = append(tokens, sb.String())
+				sb.Reset()
+			}
+		}
+	}
+	if sb.Len() > 0 {
+		tokens = append(tokens, sb.String())
+	}
+	return tokens
+}
+
 // isAlphaNum returns true if b is an ASCII letter or digit.
 func isAlphaNum(b byte) bool {
 	return (b >= 'a' && b <= 'z') ||
@@ -284,127 +304,136 @@ func BoundedLevenshtein(a, b string, threshold int) int {
 	return prev[lb]
 }
 
-func Compare(a, b any) int {
+// Compare returns the comparison result and an error if types are unsupported.
+func Compare(a, b any) (int, error) {
 	switch aVal := a.(type) {
 	case int:
 		switch bVal := b.(type) {
 		case int:
-			return aVal - bVal
+			return aVal - bVal, nil
 		case int32:
-			return aVal - int(bVal)
+			return aVal - int(bVal), nil
 		case int64:
-			return int(int64(aVal) - bVal)
+			return int(int64(aVal) - bVal), nil
 		case float32:
-			return int(float64(aVal) - float64(bVal))
+			return int(float64(aVal) - float64(bVal)), nil
 		case float64:
-			return int(float64(aVal) - bVal)
+			return int(float64(aVal) - bVal), nil
 		}
 	case int32:
 		switch bVal := b.(type) {
 		case int:
-			return int(aVal) - bVal
+			return int(aVal) - bVal, nil
 		case int32:
-			return int(aVal - bVal)
+			return int(aVal - bVal), nil
 		case int64:
-			return int(int64(aVal) - bVal)
+			return int(int64(aVal) - bVal), nil
 		case float32:
-			return int(float64(aVal) - float64(bVal))
+			return int(float64(aVal) - float64(bVal)), nil
 		case float64:
-			return int(float64(aVal) - bVal)
+			return int(float64(aVal) - bVal), nil
 		}
 	case int64:
 		switch bVal := b.(type) {
 		case int:
-			return int(aVal - int64(bVal))
+			return int(aVal - int64(bVal)), nil
 		case int32:
-			return int(aVal - int64(bVal))
+			return int(aVal - int64(bVal)), nil
 		case int64:
-			return int(aVal - bVal)
+			return int(aVal - bVal), nil
 		case float32:
-			return int(float64(aVal) - float64(bVal))
+			return int(float64(aVal) - float64(bVal)), nil
 		case float64:
-			return int(float64(aVal) - bVal)
+			return int(float64(aVal) - bVal), nil
 		}
 	case float32:
 		switch bVal := b.(type) {
 		case int:
-			return int(float64(aVal) - float64(bVal))
+			return int(float64(aVal) - float64(bVal)), nil
 		case int32:
-			return int(float64(aVal) - float64(bVal))
+			return int(float64(aVal) - float64(bVal)), nil
 		case int64:
-			return int(float64(aVal) - float64(bVal))
+			return int(float64(aVal) - float64(bVal)), nil
 		case float32:
 			diff := aVal - bVal
 			if diff < 0 {
-				return -1
+				return -1, nil
 			} else if diff > 0 {
-				return 1
+				return 1, nil
 			}
-			return 0
+			return 0, nil
 		case float64:
 			diff := float64(aVal) - bVal
 			if diff < 0 {
-				return -1
+				return -1, nil
 			} else if diff > 0 {
-				return 1
+				return 1, nil
 			}
-			return 0
+			return 0, nil
 		}
 	case float64:
 		switch bVal := b.(type) {
 		case int:
 			diff := aVal - float64(bVal)
 			if diff < 0 {
-				return -1
+				return -1, nil
 			} else if diff > 0 {
-				return 1
+				return 1, nil
 			}
-			return 0
+			return 0, nil
 		case int32:
 			diff := aVal - float64(bVal)
 			if diff < 0 {
-				return -1
+				return -1, nil
 			} else if diff > 0 {
-				return 1
+				return 1, nil
 			}
-			return 0
+			return 0, nil
 		case int64:
 			diff := aVal - float64(bVal)
 			if diff < 0 {
-				return -1
+				return -1, nil
 			} else if diff > 0 {
-				return 1
+				return 1, nil
 			}
-			return 0
+			return 0, nil
 		case float32:
 			diff := aVal - float64(bVal)
 			if diff < 0 {
-				return -1
+				return -1, nil
 			} else if diff > 0 {
-				return 1
+				return 1, nil
 			}
-			return 0
+			return 0, nil
 		case float64:
 			diff := aVal - bVal
 			if diff < 0 {
-				return -1
+				return -1, nil
 			} else if diff > 0 {
-				return 1
+				return 1, nil
 			}
-			return 0
+			return 0, nil
 		}
 	case string:
 		if bVal, ok := b.(string); ok {
 			if aVal < bVal {
-				return -1
+				return -1, nil
 			} else if aVal > bVal {
-				return 1
+				return 1, nil
 			}
-			return 0
+			return 0, nil
 		}
 	}
+	return 0, fmt.Errorf("unsupported compare types: %T and %T", a, b)
+}
 
-	panic(fmt.Sprintf("unsupported compare types: %T and %T", a, b))
+// MustCompare panics on unsupported types (legacy behavior).
+func MustCompare(a, b any) int {
+	cmp, err := Compare(a, b)
+	if err != nil {
+		panic(err)
+	}
+	return cmp
 }
 
 func ToFloat(val any) (float64, bool) {
