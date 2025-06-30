@@ -14,12 +14,12 @@ import (
 	v1 "github.com/oarkflow/lookup"
 )
 
-func mai1n() {
+func main() {
 	manager := v1.NewManager()
-	manager.StartHTTP(":8080")
+	manager.StartHTTP(":8081")
 }
 
-func main() {
+func mai1n() {
 	log.Println("Starting main function")
 
 	db, _, err := connection.FromConfig(squealx.Config{
@@ -77,7 +77,7 @@ func main() {
 		log.Fatalf("Search error: %v", err)
 	}
 	log.Printf("Found %d docs (page %d/%d) in %s\n", page.Total, page.Page, page.TotalPages, time.Since(searchStart))
-	fmt.Printf("%+v", page.Items)
+	fmt.Printf("%+v\n", page.Items)
 
 	// Example: Search by field using filters
 	req2 := v1.Request{

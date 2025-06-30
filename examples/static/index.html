@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Lookup Full-Text Search</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gradient-to-br from-gray-100 to-gray-200 min-h-screen">
+    <div class="flex min-h-screen">
+        <aside
+            class="w-64 min-w-64 max-w-64 bg-gradient-to-b from-gray-900 to-blue-900 text-white flex flex-col p-8 border-r border-gray-200">
+            <h2 class="text-xl font-semibold mb-4 tracking-wide">Indexes</h2>
+            <button id="refresh-indexes" type="button"
+                class="bg-blue-700 hover:bg-blue-500 text-white rounded px-4 py-2 mb-4 font-medium transition">Refresh
+            </button>
+            <div class="flex-1 overflow-y-auto">
+                <ul id="indexes-list" class="space-y-1"></ul>
+            </div>
+        </aside>
+        <div class="flex-1 flex flex-col bg-white">
+            <header class="px-6 pt-8 pb-4">
+                <h1 class="text-3xl font-bold text-gray-900 tracking-tight">Lookup Full-Text Search</h1>
+            </header>
+            <main class="flex-1 px-2 sm:px-6 py-2 w-full max-w-full">
+                <section id="operations-section" class="w-full max-w-7xl mx-auto">
+                    <nav class="flex space-x-2 mb-6">
+                        <button id="tab-create"
+                            class="main-tab bg-gray-100 text-gray-700 rounded-t px-4 py-2 font-medium border-b-2 border-transparent focus:outline-none active:bg-blue-600">
+                            Create Index
+                        </button>
+                        <button id="tab-upload"
+                            class="main-tab bg-gray-100 text-gray-700 rounded-t px-4 py-2 font-medium border-b-2 border-transparent focus:outline-none active:bg-blue-600">
+                            Upload Documents
+                        </button>
+                        <button id="tab-search"
+                            class="main-tab bg-gray-100 text-gray-700 rounded-t px-4 py-2 font-medium border-b-2 border-transparent focus:outline-none active:bg-blue-600">
+                            Search
+                        </button>
+                    </nav>
+                    <div id="create-section" class="tab-section">
+                        <form id="add-index-form"
+                            class="bg-gray-50 rounded-lg shadow p-6 mb-6 flex flex-wrap gap-4 items-center">
+                            <h3 class="w-full text-lg font-semibold text-blue-700 mb-2">Create Index</h3>
+                            <input type="text" id="index-id" placeholder="Index Name" required
+                                class="flex-1 min-w-[180px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                            <input type="text" id="doc-id-field" placeholder="Doc ID Field (optional)"
+                                class="flex-1 min-w-[180px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                            <input type="text" id="fields" placeholder="Fields to Index (comma separated)"
+                                class="flex-1 min-w-[180px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                            <input type="text" id="except" placeholder="Fields to Exclude (comma separated)"
+                                class="flex-1 min-w-[180px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                            <input type="number" id="workers" placeholder="Workers (default: CPU cores)"
+                                class="flex-1 min-w-[120px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                            <input type="number" id="cache" placeholder="Cache Capacity"
+                                class="flex-1 min-w-[120px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                            <button type="submit"
+                                class="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-2 font-medium transition">
+                                Add Index
+                            </button>
+                            <div id="add-index-result" class="w-full text-sm mt-2 text-gray-700 bg-blue-50 rounded p-2">
+                            </div>
+                        </form>
+                    </div>
+                    <div id="upload-section" class="tab-section hidden">
+                        <div class="bg-gray-50 rounded-lg shadow p-6 mb-6">
+                            <h3 class="text-lg font-semibold text-blue-700 mb-2">Upload Documents</h3>
+                            <nav class="flex space-x-2 mb-4">
+                                <button id="upload-tab-file"
+                                    class="upload-tab bg-gray-100 text-gray-700 rounded-t px-3 py-1 font-medium border-b-2 border-transparent focus:outline-none active:bg-blue-600 active:text-white">
+                                    From File
+                                </button>
+                                <button id="upload-tab-url"
+                                    class="upload-tab bg-gray-100 text-gray-700 rounded-t px-3 py-1 font-medium border-b-2 border-transparent focus:outline-none active:bg-blue-600 active:text-white">
+                                    From URL
+                                </button>
+                                <button id="upload-tab-paste"
+                                    class="upload-tab bg-gray-100 text-gray-700 rounded-t px-3 py-1 font-medium border-b-2 border-transparent focus:outline-none active:bg-blue-600 active:text-white">
+                                    Paste JSON
+                                </button>
+                                <button id="upload-tab-db"
+                                    class="upload-tab bg-gray-100 text-gray-700 rounded-t px-3 py-1 font-medium border-b-2 border-transparent focus:outline-none active:bg-blue-600 active:text-white">
+                                    From Database
+                                </button>
+                            </nav>
+                            <div id="upload-source-file" class="upload-source">
+                                <form id="upload-form-file" class="flex flex-wrap gap-4 items-center">
+                                    <select id="upload-index"
+                                        class="px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400">
+                                    </select>
+                                    <input type="file" id="upload-file" accept=".json,application/json" required
+                                        class="px-3 py-2 border rounded bg-white" />
+                                    <button type="submit"
+                                        class="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-2 font-medium transition">
+                                        Upload & Index
+                                    </button>
+                                </form>
+                            </div>
+                            <div id="upload-source-url" class="upload-source hidden">
+                                <form id="upload-form-url" class="flex flex-wrap gap-4 items-center">
+                                    <select id="upload-index-url"
+                                        class="px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400">
+                                    </select>
+                                    <input type="url" id="upload-url" placeholder="Paste JSON URL" required
+                                        class="flex-1 min-w-[200px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                                    <button type="submit"
+                                        class="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-2 font-medium transition">
+                                        Fetch & Index
+                                    </button>
+                                </form>
+                            </div>
+                            <div id="upload-source-paste" class="upload-source hidden">
+                                <form id="upload-form-paste" class="flex flex-wrap gap-4 items-center">
+                                    <select id="upload-index-paste"
+                                        class="px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400">
+                                    </select>
+                                    <textarea id="upload-paste" placeholder="Paste JSON array here" rows="5" required
+                                        class="flex-1 min-w-[200px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400 bg-white"></textarea>
+                                    <button type="submit"
+                                        class="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-2 font-medium transition">
+                                        Index
+                                    </button>
+                                </form>
+                            </div>
+                            <div id="upload-source-db" class="upload-source hidden">
+                                <form id="upload-form-db" class="flex flex-wrap gap-4 items-center">
+                                    <select id="upload-index-db"
+                                        class="px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400">
+                                    </select>
+                                    <input type="text" id="db-type" placeholder="DB Type (e.g. postgres, mysql)"
+                                        required
+                                        class="flex-1 min-w-[120px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                                    <input type="text" id="db-host" placeholder="Host" required
+                                        class="flex-1 min-w-[120px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                                    <input type="number" id="db-port" placeholder="Port" required
+                                        class="w-24 px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                                    <input type="text" id="db-user" placeholder="User" required
+                                        class="flex-1 min-w-[120px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                                    <input type="password" id="db-password" placeholder="Password"
+                                        class="flex-1 min-w-[120px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                                    <input type="text" id="db-name" placeholder="Database Name" required
+                                        class="flex-1 min-w-[120px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                                    <input type="text" id="db-query" placeholder="SQL Query" required
+                                        class="flex-1 min-w-[200px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                                    <button type="submit"
+                                        class="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-2 font-medium transition">
+                                        Import & Index
+                                    </button>
+                                </form>
+                            </div>
+                            <div id="upload-result" class="text-sm mt-2 text-gray-700 bg-blue-50 rounded p-2"></div>
+                        </div>
+                    </div>
+                    <div id="search-section" class="tab-section hidden">
+                        <div class="bg-gray-50 rounded-lg shadow p-6 mb-6">
+                            <h3 class="text-lg font-semibold text-blue-700 mb-2">Full-Text Search</h3>
+                            <form id="search-form" class="flex flex-wrap gap-4 items-center">
+                                <select id="search-index"
+                                    class="px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400">
+                                </select>
+                                <input type="text" id="search-query"
+                                    placeholder="Full-text query (supports phrase, wildcard, etc.)"
+                                    class="flex-1 min-w-[180px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                                <input type="number" id="search-page" placeholder="Page" min="1" value="1"
+                                    class="w-20 px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                                <input type="number" id="search-size" placeholder="Page Size" min="1" value="10"
+                                    class="w-24 px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                                <button type="submit"
+                                    class="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-2 font-medium transition">
+                                    Search
+                                </button>
+                            </form>
+                        </div>
+                        <form id="filter-form"
+                            class="bg-gray-50 rounded-lg shadow p-6 mb-6 flex flex-wrap gap-4 items-center">
+                            <h3 class="w-full text-lg font-semibold text-blue-700 mb-2">Filters</h3>
+                            <div id="filters-list" class="flex flex-wrap gap-2 mb-2"></div>
+                            <input type="text" id="filter-field" placeholder="Field"
+                                class="flex-1 min-w-[120px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                            <input type="text" id="filter-value" placeholder="Value"
+                                class="flex-1 min-w-[120px] px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400" />
+                            <select id="filter-operator"
+                                class="px-3 py-2 border rounded focus:outline-none focus:ring focus:border-blue-400">
+                                <option value="eq">=</option>
+                                <option value="ne">!=</option>
+                                <option value="in">in</option>
+                                <option value="nin">not in</option>
+                                <option value="contains">contains</option>
+                                <option value="ncontains">not contains</option>
+                                <option value="gt">&gt;</option>
+                                <option value="lt">&lt;</option>
+                                <option value="gte">&gt;=</option>
+                                <option value="lte">&lt;=</option>
+                            </select>
+                            <button type="button" id="add-filter"
+                                class="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-2 font-medium transition">
+                                Add Filter
+                            </button>
+                        </form>
+                        <div class="bg-gray-50 rounded-lg shadow p-6">
+                            <h3 class="text-lg font-semibold text-blue-700 mb-2">Results</h3>
+                            <div id="search-result" class="w-full overflow-auto max-h-[400px]"></div>
+                        </div>
+                    </div>
+                </section>
+            </main>
+        </div>
+    </div>
+    <script src="main.js"></script>
+    <script>
+        // Tailwind tab switching helpers
+        function setTabActive(tabId, group, sectionPrefix) {
+            document.querySelectorAll(group).forEach(btn => btn.classList.remove("border-blue-600", "bg-blue-600"));
+            document.getElementById(tabId).classList.add("border-blue-600", "bg-blue-600");
+            document.querySelectorAll(sectionPrefix).forEach(sec => sec.classList.add("hidden"));
+            document.getElementById(tabId.replace("tab-", "") + "-section").classList.remove("hidden");
+        }
+        // Main tabs
+        document.querySelectorAll('.main-tab').forEach(btn => {
+            btn.onclick = function () {
+                setTabActive(this.id, '.main-tab', '.tab-section');
+            };
+        });
+        // Upload tabs
+        document.querySelectorAll('.upload-tab').forEach(btn => {
+            btn.onclick = function () {
+                document.querySelectorAll('.upload-tab').forEach(b => b.classList.remove("border-blue-600", "bg-blue-600"));
+                this.classList.add("border-blue-600", "bg-blue-600");
+                document.querySelectorAll('.upload-source').forEach(sec => sec.classList.add("hidden"));
+                document.getElementById("upload-source-" + this.id.replace("upload-tab-", "")).classList.remove("hidden");
+            };
+        });
+    </script>
+</body>
+
+</html>

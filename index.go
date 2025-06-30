@@ -23,6 +23,7 @@ import (
 	"github.com/oarkflow/filters"
 	"github.com/oarkflow/json"
 	"github.com/oarkflow/squealx"
+	"github.com/oarkflow/squealx/connection"
 
 	"github.com/oarkflow/lookup/utils"
 )
@@ -126,9 +127,21 @@ type Index struct {
 	closed             chan struct{} // enhancement: for graceful shutdown
 }
 
+type DBConfig struct {
+	DBType  string `json:"type,omitempty"`
+	DBHost  string `json:"host,omitempty"`
+	DBPort  int    `json:"port,omitempty"`
+	DBUser  string `json:"user,omitempty"`
+	DBPass  string `json:"password,omitempty"`
+	DBName  string `json:"database,omitempty"`
+	DBQuery string `json:"query,omitempty"`
+}
+
 type IndexRequest struct {
-	Path string          `json:"path"`
-	Data []GenericRecord `json:"data"`
+	Path     string          `json:"path"`
+	Data     []GenericRecord `json:"data"`
+	Database *DBConfig       `json:"database,omitempty"` // enhancement: allow database config
+
 }
 
 type Options func(*Index)
@@ -206,17 +219,34 @@ func WithDocIDField(field string) Options {
 	}
 }
 
+var scoredDocPool = sync.Pool{
+	New: func() any {
+		// Preallocate a slice with some capacity for scoring
+		s := make([]ScoredDoc, 0, 1024)
+		return &s
+	},
+}
+
+var batchPool = sync.Pool{
+	New: func() any {
+		// Preallocate a slice with some capacity for batching
+		b := make([]GenericRecord, 0, 1000)
+		return &b
+	},
+}
+
 func NewIndex(id string, opts ...Options) *Index {
+	runtime.GOMAXPROCS(runtime.NumCPU()) // maximize CPU usage
 	os.MkdirAll(DefaultPath, 0755)
 	storagePath := filepath.Join(DefaultPath, "storage-"+id+".dat")
 	index := &Index{
 		ID:             id,
-		NumWorkers:     runtime.NumCPU(), // will be overridden if WithNumOfWorkers is set
+		NumWorkers:     runtime.NumCPU(), // maximize parallelism
 		index:          make(map[string][]Posting),
 		docLength:      make(map[int64]int),
 		order:          3,
 		storage:        storagePath,
-		MemoryCapacity: 1000, // will be overridden if WithCacheCapacity is set
+		MemoryCapacity: 1000,
 		searchCache:    make(map[string]cacheEntry),
 		cacheExpiry:    time.Minute,
 		closed:         make(chan struct{}),
@@ -228,7 +258,7 @@ func NewIndex(id string, opts ...Options) *Index {
 		os.Remove(storagePath)
 	}
 	index.documents = NewBPTree[int64, GenericRecord](index.order, index.storage, index.MemoryCapacity)
-	index.addDocChan = make(chan GenericRecord, 100)
+	index.addDocChan = make(chan GenericRecord, 10000) // larger buffer for high throughput
 	go index.processAddDocLoop()
 	index.startCacheCleanup()
 	return index
@@ -255,10 +285,15 @@ func (index *Index) FuzzySearch(term string, threshold int) []string {
 
 // New helper function: processAddDocLoop batches individual docs
 func (index *Index) processAddDocLoop() {
-	flushThreshold := 100
-	batch := make([]GenericRecord, 0, flushThreshold)
-	ticker := time.NewTicker(500 * time.Millisecond) // flush periodically
-	defer ticker.Stop()
+	flushThreshold := 1000 // larger batch for throughput
+	batchPtr := batchPool.Get().(*[]GenericRecord)
+	batch := *batchPtr
+	batch = batch[:0]
+	ticker := time.NewTicker(200 * time.Millisecond) // flush more frequently
+	defer func() {
+		ticker.Stop()
+		batchPool.Put(&batch)
+	}()
 	for {
 		select {
 		case rec, ok := <-index.addDocChan:
@@ -490,13 +525,32 @@ func (index *Index) Build(ctx context.Context, input any, callbacks ...func(v Ge
 	case []GenericRecord:
 		return index.BuildFromRecords(ctx, v, callbacks...)
 	case IndexRequest:
+		// Database import support
+		if v.Database != nil {
+			db, _, err := connection.FromConfig(squealx.Config{
+				Host:     v.Database.DBHost,
+				Port:     v.Database.DBPort,
+				Driver:   v.Database.DBType,
+				Username: v.Database.DBUser,
+				Password: v.Database.DBPass,
+				Database: v.Database.DBName,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to connect to database: %v", err)
+			}
+			defer db.Close()
+			return squealx.SelectEach(db, func(row map[string]any) error {
+				index.AddDocument(row)
+				return nil
+			}, v.Database.DBQuery)
+		}
 		if v.Path != "" {
 			return index.BuildFromFile(ctx, v.Path, callbacks...)
 		}
 		if len(v.Data) > 0 {
 			return index.BuildFromRecords(ctx, v.Data, callbacks...)
 		}
-		return fmt.Errorf("no data or path provided")
+		return fmt.Errorf("no data, path, or database config provided")
 	default:
 		rv := reflect.ValueOf(v)
 		if rv.Kind() == reflect.Slice {
@@ -689,6 +743,10 @@ type SearchParams struct {
 }
 
 func (index *Index) Search(ctx context.Context, req Request) (*Result, error) {
+	if index.indexingInProgress {
+		return nil, fmt.Errorf("indexing in progress; please try again later")
+	}
+	start := time.Now()
 	if index.Distributed {
 		return index.distributedSearch(ctx, req)
 	}
@@ -714,6 +772,7 @@ func (index *Index) Search(ctx context.Context, req Request) (*Result, error) {
 		TotalPages: results.TotalPages,
 		NextPage:   results.NextPage,
 		PrevPage:   results.PrevPage,
+		Latency:    fmt.Sprintf("%s", time.Since(start)),
 	}
 	return pagedData, nil
 }
@@ -787,6 +846,9 @@ DONE:
 }
 
 func (index *Index) SearchScoreDocs(ctx context.Context, req Request) (Page, error) {
+	if index.indexingInProgress {
+		return Page{}, fmt.Errorf("indexing in progress; please try again later")
+	}
 	req.Match = "AND"
 	if utils.ToLower(req.Match) == "any" {
 		req.Match = "OR"
@@ -881,21 +943,25 @@ func (index *Index) SearchScoreDocs(ctx context.Context, req Request) (Page, err
 	if params.BM25Params.K != 0 || params.BM25Params.B != 0 {
 		bm25 = params.BM25Params
 	}
-	var (
-		scored []ScoredDoc
-		wg     sync.WaitGroup
-		mu     sync.Mutex
-	)
 	docIDs := query.Evaluate(index)
+	if len(docIDs) == 0 {
+		return smartPaginate(nil, page, perPage), nil
+	}
 	ch := make(chan int64, len(docIDs))
 	for _, id := range docIDs {
 		ch <- id
 	}
 	close(ch)
+	scoredPtr := scoredDocPool.Get().(*[]ScoredDoc)
+	scored := *scoredPtr
+	scored = scored[:0]
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	for i := 0; i < index.NumWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			localScored := make([]ScoredDoc, 0, 256)
 			for docID := range ch {
 				select {
 				case <-ctx.Done():
@@ -903,22 +969,18 @@ func (index *Index) SearchScoreDocs(ctx context.Context, req Request) (Page, err
 				default:
 				}
 				score := index.bm25Score(queryTokens, docID, bm25.K, bm25.B)
+				localScored = append(localScored, ScoredDoc{DocID: docID, Score: score})
+			}
+			if len(localScored) > 0 {
 				mu.Lock()
-				scored = append(scored, ScoredDoc{DocID: docID, Score: score})
-				// Early return: if we have enough results for the requested page, return immediately.
-				if len(scored) == perPage {
-					mu.Unlock()
-					return
-				}
+				scored = append(scored, localScored...)
 				mu.Unlock()
 			}
 		}()
 	}
 	wg.Wait()
-	// Early return: if we have exactly perPage results, skip sorting/pagination.
-	if len(scored) == perPage {
-		return smartPaginate(scored, page, perPage), nil
-	}
+	*scoredPtr = scored[:0] // reset before putting back
+	scoredDocPool.Put(scoredPtr)
 	if len(params.SortFields) > 0 {
 		index.sortData(scored, params.SortFields)
 	} else {
@@ -980,6 +1042,7 @@ type Result struct {
 	TotalPages int             `json:"total_pages"`
 	NextPage   *int            `json:"next_page"`
 	PrevPage   *int            `json:"prev_page"`
+	Latency    string          `json:"latency"` // enhancement: add latency for performance tracking
 }
 
 func smartPaginate(docs []ScoredDoc, page, perPage int) Page {

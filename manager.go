@@ -81,7 +81,6 @@ func (m *Manager) Search(ctx context.Context, name string, req Request) (*Result
 		fmt.Printf("index %s not found\n", name)
 		return nil, fmt.Errorf("index %s not found", name)
 	}
-
 	return index.Search(ctx, req)
 }
 
@@ -236,6 +235,8 @@ func prepareQuery(r *http.Request) (Request, error) {
 }
 
 func (m *Manager) StartHTTP(addr string) {
+	http.Handle("/", http.FileServer(http.Dir("./static")))
+
 	http.HandleFunc("/index/add", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Unsupported method", http.StatusMethodNotAllowed)
@@ -315,12 +316,22 @@ func (m *Manager) StartHTTP(addr string) {
 			http.Error(w, fmt.Sprintf("Error unmarshalling request: %v", err), http.StatusBadRequest)
 			return
 		}
+		// Support DB import via IndexRequest
+		if req.Database != nil {
+			go func(indexName string, req IndexRequest) {
+				err = m.Build(context.Background(), indexName, req)
+				if err != nil {
+					log.Printf("Build error: %v", err)
+				}
+			}(indexName, req)
+			_, _ = w.Write([]byte(fmt.Sprintf("Database import started for index %s", indexName)))
+			return
+		}
 		if req.Path != "" {
 			go func(indexName string, req IndexRequest) {
 				err = m.Build(context.Background(), indexName, req)
 				if err != nil {
-					http.Error(w, fmt.Sprintf("Build error: %v", err), http.StatusInternalServerError)
-					return
+					log.Printf("Build error: %v", err)
 				}
 			}(indexName, req)
 			_, _ = w.Write([]byte(fmt.Sprintf("Indexing started for %s with index name %s", req.Path, indexName)))
@@ -443,7 +454,11 @@ func (m *Manager) StartHTTP(addr string) {
 			os.Exit(0)
 		}()
 	})
-
-	log.Printf("HTTP server listening on %s", addr)
+	addr = strings.TrimSpace(addr)
+	urlParts := strings.Split(addr, ":")
+	if urlParts[0] == "" {
+		addr = "0.0.0.0:" + urlParts[1]
+	}
+	log.Printf("HTTP server listening on http://%s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
