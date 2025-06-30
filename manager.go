@@ -164,7 +164,7 @@ func prepareQuery(r *http.Request) (Request, error) {
 		return query, err
 	}
 	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	if bodyBytes != nil && len(bodyBytes) > 0 {
+	if len(bodyBytes) > 0 {
 		err = json.Unmarshal(bodyBytes, &query)
 		if err != nil {
 			return query, fmt.Errorf("error unmarshalling query: %v", err)
@@ -248,7 +248,7 @@ func (m *Manager) StartHTTP(addr string) {
 		}
 		index := NewIndex(req.ID)
 		m.AddIndex(req.ID, index)
-		w.Write([]byte(fmt.Sprintf("index %s created successfully", req.ID)))
+		_, _ = w.Write([]byte(fmt.Sprintf("index %s created successfully", req.ID)))
 	})
 	http.HandleFunc("/indexes", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -257,7 +257,7 @@ func (m *Manager) StartHTTP(addr string) {
 		}
 		indexes := m.ListIndexes()
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(indexes)
+		_ = json.NewEncoder(w).Encode(indexes)
 	})
 	http.HandleFunc("/{index}/build", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -289,7 +289,7 @@ func (m *Manager) StartHTTP(addr string) {
 					return
 				}
 			}(indexName, req)
-			w.Write([]byte(fmt.Sprintf("Indexing started for %s with index name %s", req.Path, indexName)))
+			_, _ = w.Write([]byte(fmt.Sprintf("Indexing started for %s with index name %s", req.Path, indexName)))
 			return
 		}
 		err = m.Build(ctx, indexName, req)
@@ -297,7 +297,7 @@ func (m *Manager) StartHTTP(addr string) {
 			http.Error(w, fmt.Sprintf("Build error: %v", err), http.StatusInternalServerError)
 			return
 		}
-		w.Write([]byte("index built successfully"))
+		_, _ = w.Write([]byte("index built successfully"))
 	})
 	http.HandleFunc("/{index}/search", func(w http.ResponseWriter, r *http.Request) {
 		indexName := r.PathValue("index")
@@ -318,7 +318,7 @@ func (m *Manager) StartHTTP(addr string) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(results)
+		_ = json.NewEncoder(w).Encode(results)
 	})
 
 	log.Printf("HTTP server listening on %s", addr)
