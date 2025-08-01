@@ -2,6 +2,7 @@ package lookup
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sort"
 	"strings"
@@ -415,4 +416,194 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// UpdateDocument updates an existing document by replacing it
+func (ei *EnhancedIndex) UpdateDocument(docIndex int, updatedDoc GenericRecord) error {
+	ei.Lock()
+	defer ei.Unlock()
+
+	// Get all documents to find the one at the specified index
+	var docs []GenericRecord
+	var docIDs []int64
+	ei.documents.ForEach(func(docID int64, doc GenericRecord) bool {
+		docs = append(docs, doc)
+		docIDs = append(docIDs, docID)
+		return true
+	})
+
+	if docIndex < 0 || docIndex >= len(docs) {
+		return fmt.Errorf("document index %d out of range", docIndex)
+	}
+
+	targetDocID := docIDs[docIndex]
+	oldDoc := docs[docIndex]
+
+	// Remove old document from inverted index
+	ei.removeDocumentFromIndex(targetDocID, oldDoc)
+
+	// Update document in storage
+	ei.documents.Insert(targetDocID, updatedDoc)
+
+	// Add updated document to inverted index
+	ei.addDocumentToIndex(targetDocID, updatedDoc)
+
+	return nil
+}
+
+// DeleteDocument removes a document by index
+func (ei *EnhancedIndex) DeleteDocument(docIndex int) error {
+	ei.Lock()
+	defer ei.Unlock()
+
+	// Get all documents to find the one at the specified index
+	var docs []GenericRecord
+	var docIDs []int64
+	ei.documents.ForEach(func(docID int64, doc GenericRecord) bool {
+		docs = append(docs, doc)
+		docIDs = append(docIDs, docID)
+		return true
+	})
+
+	if docIndex < 0 || docIndex >= len(docs) {
+		return fmt.Errorf("document index %d out of range", docIndex)
+	}
+
+	targetDocID := docIDs[docIndex]
+	oldDoc := docs[docIndex]
+
+	// Remove document from inverted index
+	ei.removeDocumentFromIndex(targetDocID, oldDoc)
+
+	// Remove document from storage
+	ei.documents.Delete(targetDocID)
+
+	// Update document length tracking
+	delete(ei.docLength, targetDocID)
+
+	// Decrease total document count
+	ei.TotalDocs--
+
+	return nil
+}
+
+// removeDocumentFromIndex removes a document's terms from the inverted index
+func (ei *EnhancedIndex) removeDocumentFromIndex(docID int64, doc GenericRecord) {
+	// Get all terms for this document
+	terms := ei.getDocumentTerms(doc)
+
+	// Remove document from each term's posting list
+	for _, term := range terms {
+		if postings, exists := ei.index[term]; exists {
+			// Filter out postings for this document
+			newPostings := make([]Posting, 0, len(postings))
+			for _, posting := range postings {
+				if posting.DocID != docID {
+					newPostings = append(newPostings, posting)
+				}
+			}
+
+			if len(newPostings) == 0 {
+				// Remove term entirely if no postings left
+				delete(ei.index, term)
+			} else {
+				ei.index[term] = newPostings
+			}
+		}
+	}
+}
+
+// addDocumentToIndex adds a document's terms to the inverted index
+func (ei *EnhancedIndex) addDocumentToIndex(docID int64, doc GenericRecord) {
+	// Get all terms for this document
+	terms := ei.getDocumentTerms(doc)
+	termFreq := make(map[string]int)
+
+	// Count term frequencies
+	for _, term := range terms {
+		termFreq[term]++
+	}
+
+	// Add to inverted index
+	for term, freq := range termFreq {
+		posting := Posting{
+			DocID:     docID,
+			Frequency: freq,
+		}
+		ei.index[term] = append(ei.index[term], posting)
+	}
+
+	// Update document length
+	ei.docLength[docID] = len(terms)
+}
+
+// getDocumentTerms extracts all terms from a document
+func (ei *EnhancedIndex) getDocumentTerms(doc GenericRecord) []string {
+	var terms []string
+
+	for field, value := range doc {
+		// Skip excluded fields
+		if ei.shouldSkipField(field) {
+			continue
+		}
+
+		// Convert value to string and tokenize
+		strValue := ei.valueToString(value)
+		if strValue != "" {
+			fieldTerms := ei.tokenize(strValue)
+			terms = append(terms, fieldTerms...)
+		}
+	}
+
+	return terms
+}
+
+// shouldSkipField checks if a field should be skipped during indexing
+func (ei *EnhancedIndex) shouldSkipField(field string) bool {
+	// Check if field is in exclusion list
+	for _, excluded := range ei.IndexFieldsExcept {
+		if field == excluded {
+			return true
+		}
+	}
+
+	// Check if we have a specific inclusion list and field is not in it
+	if len(ei.FieldsToIndex) > 0 {
+		included := false
+		for _, included_field := range ei.FieldsToIndex {
+			if field == included_field {
+				included = true
+				break
+			}
+		}
+		if !included {
+			return true
+		}
+	}
+
+	return false
+}
+
+// valueToString converts a value to string for indexing
+func (ei *EnhancedIndex) valueToString(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case int, int32, int64, float32, float64:
+		return fmt.Sprintf("%v", v)
+	case bool:
+		return fmt.Sprintf("%v", v)
+	default:
+		// For complex objects, skip indexing
+		return ""
+	}
+}
+
+// tokenize breaks text into terms
+func (ei *EnhancedIndex) tokenize(text string) []string {
+	// Use the appropriate tokenizer based on settings
+	if ei.enableStemming {
+		return utils.TokenizeWithStemming(text)
+	}
+	return utils.Tokenize(text)
 }

@@ -4,63 +4,235 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>High-Performance Search Engine</title>
+    <title>Enterprise Search Engine</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --primary: #4f46e5;
+            --primary-dark: #3730a3;
+            --bg: #f4f6fa;
+            --sidebar-bg: #232946;
+            --sidebar-active: #4f46e5;
+            --sidebar-text: #eaeaea;
+            --card-bg: #fff;
+            --border: #e5e7eb;
+            --accent: #facc15;
+        }
+
+        html,
+        body {
+            height: 100%;
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
+            background: var(--bg);
+            color: #232946;
             min-height: 100vh;
-            color: #333;
         }
 
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
+        .layout {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            width: 300px;
+            background: var(--sidebar-bg);
+            color: var(--sidebar-text);
+            display: flex;
+            flex-direction: column;
+            padding: 32px 0 0 0;
+            box-shadow: 2px 0 8px rgba(44, 62, 80, 0.04);
+        }
+
+        .sidebar .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: var(--accent);
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .sidebar-nav {
+            flex: 1;
+        }
+
+        .sidebar-nav button {
+            display: flex;
+            align-items: center;
+            width: 100%;
+            background: none;
+            border: none;
+            color: inherit;
+            font-size: 1rem;
+            padding: 16px 32px;
+            cursor: pointer;
+            transition: background 0.15s;
+            outline: none;
+        }
+
+        .sidebar-nav button.active,
+        .sidebar-nav button:hover {
+            background: var(--sidebar-active);
+            color: #fff;
+        }
+
+        .sidebar-nav button .icon {
+            margin-right: 12px;
+            font-size: 1.2em;
+        }
+
+        .sidebar-footer {
+            padding: 24px 32px;
+            font-size: 0.9em;
+            color: #a1a1aa;
+            border-top: 1px solid #2d3250;
+        }
+
+        .main {
+            flex: 1;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
         }
 
         .header {
-            text-align: center;
-            margin-bottom: 40px;
-            color: white;
+            background: #fff;
+            padding: 28px 40px 18px 40px;
+            border-bottom: 1px solid var(--border);
+            box-shadow: 0 2px 8px rgba(44, 62, 80, 0.03);
         }
 
         .header h1 {
-            font-size: 3rem;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+            font-size: 2rem;
+            font-weight: 700;
+            margin: 0 0 6px 0;
+            color: var(--primary);
         }
 
         .header p {
-            font-size: 1.2rem;
-            opacity: 0.9;
+            color: #6b7280;
+            font-size: 1.05rem;
+            margin: 0;
         }
 
-        .dashboard {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            margin-bottom: 40px;
+        .content {
+            flex: 1;
+            padding: 32px 40px;
+            background: var(--bg);
         }
 
         .card {
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 15px;
-            padding: 30px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-            backdrop-filter: blur(10px);
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(44, 62, 80, 0.06);
+            padding: 32px;
+            margin-bottom: 32px;
         }
 
         .card h2 {
-            margin-bottom: 20px;
-            color: #4a5568;
-            font-size: 1.5rem;
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 18px;
+            color: var(--primary-dark);
+        }
+
+        .metrics-row {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 32px;
+        }
+
+        .metric {
+            flex: 1;
+            background: #f3f4f6;
+            border-radius: 10px;
+            padding: 22px 0;
+            text-align: center;
+            box-shadow: 0 1px 4px rgba(44, 62, 80, 0.03);
+        }
+
+        .metric-value {
+            font-size: 2.1rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .metric-label {
+            color: #6b7280;
+            font-size: 1rem;
+            margin-top: 4px;
+        }
+
+        /* Table styles */
+        .table-responsive {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #fff;
+        }
+
+        th,
+        td {
+            padding: 14px 12px;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+            font-size: 1rem;
+        }
+
+        th {
+            background: #f3f4f6;
+            color: #232946;
+            font-weight: 600;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .highlight {
+            background: #fef9c3;
+            border-radius: 3px;
+            padding: 1px 4px;
+        }
+
+        .btn {
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: 7px;
+            padding: 10px 22px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            margin-right: 8px;
+            transition: background 0.15s;
+        }
+
+        .btn:hover {
+            background: var(--primary-dark);
+        }
+
+        .btn-danger {
+            background: #ef4444;
+        }
+
+        .btn-danger:hover {
+            background: #b91c1c;
+        }
+
+        .btn-secondary {
+            background: #e5e7eb;
+            color: #232946;
+        }
+
+        .btn-secondary:hover {
+            background: #d1d5db;
         }
 
         .form-group {
@@ -68,10 +240,10 @@
         }
 
         .form-group label {
+            font-weight: 500;
+            margin-bottom: 7px;
             display: block;
-            margin-bottom: 8px;
-            font-weight: 600;
-            color: #2d3748;
+            color: #232946;
         }
 
         .form-group input,
@@ -79,585 +251,2323 @@
         .form-group textarea {
             width: 100%;
             padding: 12px;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: all 0.3s ease;
+            border: 1.5px solid var(--border);
+            border-radius: 7px;
+            font-size: 1rem;
+            background: #f9fafb;
+            transition: border 0.2s;
         }
 
         .form-group input:focus,
         .form-group select:focus,
         .form-group textarea:focus {
+            border-color: var(--primary);
             outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
 
-        .btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 12px 30px;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-
-        .btn:active {
-            transform: translateY(0);
-        }
-
-        .btn.btn-danger {
-            background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);
-        }
-
-        .btn.btn-success {
-            background: linear-gradient(135deg, #38a169 0%, #2f855a 100%);
-        }
-
-        .search-section {
-            grid-column: 1 / -1;
-        }
-
-        .search-container {
-            position: relative;
-            margin-bottom: 30px;
-        }
-
-        .search-input {
-            width: 100%;
-            padding: 20px;
-            font-size: 18px;
-            border: 3px solid #e2e8f0;
-            border-radius: 50px;
-            padding-left: 60px;
-            background: white;
-        }
-
-        .search-icon {
-            position: absolute;
-            left: 20px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: #a0aec0;
-            font-size: 20px;
-        }
-
-        .search-filters {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-
-        .results {
-            margin-top: 30px;
-        }
-
-        .result-item {
-            background: white;
+        .upload-area {
+            border: 2px dashed #cbd5e1;
             border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 15px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-            transition: all 0.3s ease;
-        }
-
-        .result-item:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.15);
-        }
-
-        .result-title {
-            font-size: 1.3rem;
-            font-weight: 600;
-            color: #2d3748;
-            margin-bottom: 10px;
-        }
-
-        .result-content {
-            color: #4a5568;
-            line-height: 1.6;
-            margin-bottom: 10px;
-        }
-
-        .result-meta {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-size: 0.9rem;
-            color: #718096;
-        }
-
-        .score {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-weight: 600;
-        }
-
-        .metrics {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-
-        .metric-card {
-            background: rgba(255, 255, 255, 0.9);
-            border-radius: 10px;
-            padding: 20px;
+            padding: 36px;
             text-align: center;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            background: #f9fafb;
+            color: #6b7280;
+            cursor: pointer;
+            margin-bottom: 18px;
         }
 
-        .metric-value {
-            font-size: 2rem;
-            font-weight: 700;
-            color: #667eea;
-            margin-bottom: 5px;
-        }
-
-        .metric-label {
-            color: #4a5568;
-            font-weight: 600;
-        }
-
-        .index-list {
-            max-height: 300px;
-            overflow-y: auto;
-        }
-
-        .index-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px;
-            border-bottom: 1px solid #e2e8f0;
-            transition: background-color 0.3s;
-        }
-
-        .index-item:hover {
-            background-color: #f7fafc;
-        }
-
-        .index-name {
-            font-weight: 600;
-            color: #2d3748;
-        }
-
-        .index-stats {
-            font-size: 0.9rem;
-            color: #718096;
+        .upload-area.dragover {
+            border-color: var(--primary);
+            background: #eef2ff;
         }
 
         .loading {
             text-align: center;
-            padding: 40px;
-            color: #667eea;
+            color: var(--primary);
+            padding: 30px 0;
         }
 
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-
-        @keyframes spin {
-            0% {
-                transform: rotate(0deg);
-            }
-
-            100% {
-                transform: rotate(360deg);
-            }
-        }
-
-        .highlight {
-            background-color: #fed7d7;
-            padding: 2px 4px;
-            border-radius: 3px;
-            font-weight: 600;
-        }
-
-        @media (max-width: 768px) {
-            .dashboard {
-                grid-template-columns: 1fr;
-            }
-
-            .header h1 {
-                font-size: 2rem;
-            }
-
-            .search-filters {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .tab-container {
-            margin-bottom: 30px;
-        }
-
-        .tabs {
+        /* Advanced Search Styles */
+        .search-mode-toggle {
             display: flex;
-            border-bottom: 2px solid #e2e8f0;
+            gap: 8px;
             margin-bottom: 20px;
         }
 
-        .tab {
-            padding: 15px 30px;
-            background: none;
-            border: none;
-            font-size: 16px;
-            font-weight: 600;
-            color: #718096;
+        .search-mode-toggle button {
+            padding: 8px 16px;
+            border: 2px solid var(--border);
+            background: white;
+            color: #232946;
+            border-radius: 6px;
             cursor: pointer;
-            transition: all 0.3s ease;
-            border-bottom: 3px solid transparent;
+            font-size: 0.9rem;
+            transition: all 0.2s;
         }
 
-        .tab.active {
-            color: #667eea;
-            border-bottom-color: #667eea;
+        .search-mode-toggle button.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
         }
 
-        .tab-content {
+        .advanced-search {
             display: none;
+            background: #f8fafc;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
         }
 
-        .tab-content.active {
-            display: block;
+        .filter-row {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
         }
 
-        .upload-area {
-            border: 2px dashed #cbd5e0;
-            border-radius: 10px;
-            padding: 40px;
-            text-align: center;
-            transition: all 0.3s ease;
+        .filter-row .form-group {
+            margin-bottom: 0;
+            min-width: 120px;
+        }
+
+        .filter-row .form-group.field-select {
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .filter-row .form-group.operator-select {
+            min-width: 120px;
+        }
+
+        .filter-row .form-group.value-input {
+            flex: 2;
+            min-width: 200px;
+        }
+
+        .filter-row .btn {
+            margin-bottom: 0;
+            height: 44px;
+        }
+
+        .condition-row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 16px;
+            padding: 12px;
+            background: white;
+            border-radius: 6px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .condition-row select {
+            min-width: 100px;
+        }
+
+        /* Index Detail Styles */
+        .index-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .index-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .filter-panel {
+            background: #f8fafc;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .filter-panel h3 {
+            margin: 0 0 16px 0;
+            font-size: 1.1rem;
+            color: var(--primary-dark);
+        }
+
+        .quick-filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .quick-filter {
+            padding: 6px 12px;
+            background: white;
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 0.85rem;
             cursor: pointer;
+            transition: all 0.2s;
         }
 
-        .upload-area:hover {
-            border-color: #667eea;
-            background-color: #f7fafc;
+        .quick-filter:hover,
+        .quick-filter.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
         }
 
-        .upload-area.dragover {
-            border-color: #667eea;
-            background-color: #ebf8ff;
+        .breadcrumb {
+            color: #6b7280;
+            margin-bottom: 16px;
+            font-size: 0.9rem;
+        }
+
+        .breadcrumb a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+
+        /* CRUD Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            animation: fadeIn 0.2s;
+        }
+
+        .modal-content {
+            background-color: var(--card-bg);
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+            animation: slideIn 0.3s;
+        }
+
+        .modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            margin: 0;
+            color: var(--primary-dark);
+        }
+
+        .modal-body {
+            padding: 24px;
+        }
+
+        .modal-footer {
+            padding: 16px 24px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .close {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        .close:hover,
+        .close:focus {
+            color: #000;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        /* Data Table Actions */
+        .data-actions {
+            display: flex;
+            gap: 4px;
+        }
+
+        .data-actions .btn {
+            padding: 4px 8px;
+            font-size: 0.8rem;
+            margin: 0;
+        }
+
+        /* JSON Editor */
+        .json-editor {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 13px;
+            line-height: 1.4;
+            background: #f8f9fa;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 12px;
+            min-height: 200px;
+            resize: vertical;
+        }
+
+        .json-editor:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+        }
+
+        /* Form validation */
+        .error {
+            color: #ef4444;
+            font-size: 0.875rem;
+            margin-top: 4px;
+        }
+
+        .success {
+            color: #10b981;
+            font-size: 0.875rem;
+            margin-top: 4px;
+        }
+
+        /* Dynamic Form Styles */
+        .dynamic-field {
+            margin-bottom: 20px;
+        }
+
+        .dynamic-field label {
+            font-weight: 500;
+            margin-bottom: 7px;
+            display: block;
+            color: #232946;
+        }
+
+        .field-type-indicator {
+            font-size: 0.8rem;
+            color: #6b7280;
+            margin-left: 8px;
+            font-style: italic;
+        }
+
+        .dynamic-field input,
+        .dynamic-field select,
+        .dynamic-field textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1.5px solid var(--border);
+            border-radius: 7px;
+            font-size: 1rem;
+            background: #f9fafb;
+            transition: border 0.2s;
+            box-sizing: border-box;
+        }
+
+        .dynamic-field input:focus,
+        .dynamic-field select:focus,
+        .dynamic-field textarea:focus {
+            border-color: var(--primary);
+            outline: none;
+        }
+
+        .checkbox-field {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .checkbox-field input[type="checkbox"] {
+            width: auto;
+            margin: 0;
+        }
+
+        .array-field {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            background: #f8fafc;
+        }
+
+        .array-field-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .array-item {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 8px;
+            padding: 8px;
+            background: white;
+            border-radius: 6px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .array-item input {
+            flex: 1;
+            margin: 0;
+        }
+
+        .array-item button {
+            margin: 0;
+            padding: 4px 8px;
+            font-size: 0.8rem;
+        }
+
+        .add-array-item {
+            margin-top: 8px;
+        }
+
+        .object-field {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            background: #f8fafc;
+        }
+
+        .nested-field {
+            margin-left: 16px;
+            padding-left: 16px;
+            border-left: 2px solid var(--border);
+        }
+
+        @media (max-width: 900px) {
+            .layout {
+                flex-direction: column;
+            }
+
+            .sidebar {
+                width: 100%;
+                flex-direction: row;
+                padding: 0;
+            }
+
+            .sidebar .logo {
+                display: none;
+            }
+
+            .sidebar-nav {
+                flex-direction: row;
+            }
+
+            .sidebar-nav button {
+                padding: 12px 10px;
+                font-size: 0.95rem;
+            }
+
+            .main {
+                padding: 0;
+            }
+
+            .header,
+            .content {
+                padding: 18px 10px;
+            }
+
+            .card {
+                padding: 16px;
+            }
+        }
+
+        @media (max-width: 600px) {
+            .metrics-row {
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            .card {
+                padding: 8px;
+            }
+
+            .header {
+                padding: 10px 6px;
+            }
         }
     </style>
 </head>
 
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🚀 High-Performance Search Engine</h1>
-            <p>Advanced full-text search with real-time indexing and analytics</p>
-        </div>
-
-        <!-- Metrics Dashboard -->
-        <div class="metrics" id="metrics">
-            <div class="metric-card">
-                <div class="metric-value" id="totalIndexes">0</div>
-                <div class="metric-label">Total Indexes</div>
+    <div class="layout">
+        <nav class="sidebar">
+            <div class="logo">🔎 Lookup</div>
+            <div class="sidebar-nav">
+                <button class="active" onclick="showPage('search', this)"><span class="icon">🔍</span>Search</button>
+                <button onclick="showPage('indexes', this)"><span class="icon">📚</span>Index Management</button>
+                <button onclick="showPage('browse', this)"><span class="icon">🗂️</span>Browse Indexes</button>
+                <button onclick="showPage('adddata', this)"><span class="icon">➕</span>Add Data</button>
             </div>
-            <div class="metric-card">
-                <div class="metric-value" id="totalDocuments">0</div>
-                <div class="metric-label">Total Documents</div>
+            <div class="sidebar-footer">
+                <div style="font-size:0.95em;">Enterprise Search Engine</div>
             </div>
-            <div class="metric-card">
-                <div class="metric-value" id="totalQueries">0</div>
-                <div class="metric-label">Total Queries</div>
+        </nav>
+        <div class="main">
+            <div class="header">
+                <h1>Enterprise Search Engine</h1>
+                <p>Minimal, high-performance full-text search with real-time analytics</p>
             </div>
-        </div>
-
-        <div class="dashboard">
-            <!-- Index Management -->
-            <div class="card">
-                <h2>📚 Index Management</h2>
-
-                <div class="tab-container">
-                    <div class="tabs">
-                        <button class="tab active" onclick="switchTab('create')">Create</button>
-                        <button class="tab" onclick="switchTab('list')">List</button>
-                        <button class="tab" onclick="switchTab('upload')">Upload Data</button>
-                    </div>
-
-                    <div id="create-tab" class="tab-content active">
-                        <div class="form-group">
-                            <label for="indexName">Index Name</label>
-                            <input type="text" id="indexName" placeholder="Enter index name">
+            <div class="content">
+                <!-- Search Page -->
+                <section id="page-search">
+                    <div class="metrics-row" id="metrics">
+                        <div class="metric">
+                            <div class="metric-value" id="totalIndexes">0</div>
+                            <div class="metric-label">Indexes</div>
                         </div>
-                        <button class="btn" onclick="createIndex()">Create Index</button>
+                        <div class="metric">
+                            <div class="metric-value" id="totalDocuments">0</div>
+                            <div class="metric-label">Documents</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value" id="totalQueries">0</div>
+                            <div class="metric-label">Queries</div>
+                        </div>
                     </div>
+                    <div class="card">
+                        <h2>🔍 Search</h2>
 
-                    <div id="list-tab" class="tab-content">
-                        <div class="index-list" id="indexList">
-                            <div class="loading">
-                                <div class="spinner"></div>
-                                Loading indexes...
+                        <!-- Search Mode Toggle -->
+                        <div class="search-mode-toggle">
+                            <button class="active" onclick="toggleSearchMode('simple', this)">Simple Search</button>
+                            <button onclick="toggleSearchMode('advanced', this)">Advanced Search</button>
+                        </div>
+
+                        <!-- Simple Search Form -->
+                        <form id="simpleSearchForm" onsubmit="performSearch(); return false;">
+                            <div class="form-group">
+                                <label for="searchQuery">Query</label>
+                                <input type="text" id="searchQuery" placeholder="Enter search terms..."
+                                    autocomplete="off">
+                            </div>
+                            <div style="display: flex; gap: 16px;">
+                                <div class="form-group" style="flex:1;">
+                                    <label for="searchIndex">Index</label>
+                                    <select id="searchIndex">
+                                        <option value="">All indexes</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="width:120px;">
+                                    <label for="searchSize">Results</label>
+                                    <select id="searchSize">
+                                        <option value="10">10</option>
+                                        <option value="20">20</option>
+                                        <option value="50">50</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="width:150px;">
+                                    <label for="searchType">Type</label>
+                                    <select id="searchType">
+                                        <option value="fuzzy">Fuzzy</option>
+                                        <option value="exact">Exact</option>
+                                        <option value="phrase">Phrase</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <button class="btn" type="submit" style="margin-top:10px;">Search</button>
+                        </form>
+
+                        <!-- Advanced Search Form -->
+                        <div id="advancedSearch" class="advanced-search">
+                            <div class="form-group">
+                                <label for="advancedIndex">Target Index</label>
+                                <select id="advancedIndex">
+                                    <option value="">Select an index</option>
+                                </select>
+                            </div>
+
+                            <!-- Query Conditions -->
+                            <div class="condition-row">
+                                <label style="margin-right: 12px; font-weight: 500;">Query Logic:</label>
+                                <select id="queryLogic">
+                                    <option value="AND">AND (All conditions)</option>
+                                    <option value="OR">OR (Any condition)</option>
+                                </select>
+                            </div>
+
+                            <!-- Filter Rows -->
+                            <div id="filterRows">
+                                <div class="filter-row">
+                                    <div class="form-group field-select">
+                                        <label>Field</label>
+                                        <select class="filter-field">
+                                            <option value="">Select field...</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group operator-select">
+                                        <label>Operator</label>
+                                        <select class="filter-operator">
+                                            <option value="contains">Contains</option>
+                                            <option value="equals">Equals</option>
+                                            <option value="starts_with">Starts With</option>
+                                            <option value="ends_with">Ends With</option>
+                                            <option value="gt">Greater Than</option>
+                                            <option value="gte">Greater Than or Equal</option>
+                                            <option value="lt">Less Than</option>
+                                            <option value="lte">Less Than or Equal</option>
+                                            <option value="not_equals">Not Equals</option>
+                                            <option value="in">In List</option>
+                                            <option value="not_in">Not In List</option>
+                                            <option value="regex">Regex Match</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group value-input">
+                                        <label>Value</label>
+                                        <input type="text" class="filter-value" placeholder="Enter value...">
+                                    </div>
+                                    <button type="button" class="btn btn-secondary"
+                                        onclick="removeFilterRow(this)">Remove</button>
+                                </div>
+                            </div>
+
+                            <div style="margin: 16px 0;">
+                                <button type="button" class="btn btn-secondary" onclick="addFilterRow()">Add
+                                    Filter</button>
+                                <button type="button" class="btn" onclick="performAdvancedSearch()"
+                                    style="margin-left: 8px;">Search</button>
                             </div>
                         </div>
-                        <button class="btn" onclick="loadIndexes()">Refresh</button>
+
+                        <div style="margin-top:30px;">
+                            <div class="table-responsive">
+                                <table id="resultsTable" style="display:none;">
+                                    <thead>
+                                        <tr id="resultsTableHead"></tr>
+                                    </thead>
+                                    <tbody id="resultsTableBody"></tbody>
+                                </table>
+                            </div>
+                            <div id="searchResults" class="loading" style="display:none;"></div>
+                        </div>
+                    </div>
+                </section>
+                <!-- Browse Indexes Page -->
+                <section id="page-browse" style="display:none;">
+                    <!-- Index List View -->
+                    <div id="indexListView" class="card">
+                        <h2>🗂️ Browse Indexes</h2>
+                        <div id="browseIndexesList">
+                            <div class="loading">Loading indexes...</div>
+                        </div>
                     </div>
 
-                    <div id="upload-tab" class="tab-content">
-                        <div class="form-group">
+                    <!-- Index Detail View -->
+                    <div id="indexDetailView" class="card" style="display:none;">
+                        <div class="breadcrumb">
+                            <a href="#" onclick="showIndexList()">← Back to Indexes</a>
+                        </div>
+
+                        <div class="index-header">
+                            <div>
+                                <h2 id="indexDetailTitle">📊 Index Details</h2>
+                                <p id="indexDetailStats" style="color: #6b7280; margin: 4px 0 0 0;"></p>
+                            </div>
+                            <div class="index-actions">
+                                <button class="btn btn-secondary" onclick="showCreateDocumentModal()">➕ Add
+                                    Document</button>
+                                <button class="btn btn-secondary" onclick="refreshIndexData()">🔄 Refresh</button>
+                                <button class="btn" onclick="exportIndexData()">📤 Export</button>
+                            </div>
+                        </div>
+
+                        <!-- Filter Panel -->
+                        <div class="filter-panel">
+                            <h3>🔍 Filter Data</h3>
+
+                            <!-- Quick Filters -->
+                            <div id="quickFilters" class="quick-filters">
+                                <!-- Dynamic quick filters will be added here -->
+                            </div>
+
+                            <!-- Filter Mode Toggle -->
+                            <div class="search-mode-toggle" style="margin-bottom: 16px;">
+                                <button class="active" onclick="toggleFilterMode('simple', this)">Simple Filter</button>
+                                <button onclick="toggleFilterMode('advanced', this)">Advanced Filter</button>
+                            </div>
+
+                            <!-- Simple Filter -->
+                            <div id="simpleFilter">
+                                <div style="display: flex; gap: 12px; align-items: flex-end;">
+                                    <div class="form-group" style="flex: 1;">
+                                        <label>Search in all fields</label>
+                                        <input type="text" id="simpleFilterQuery" placeholder="Enter search term...">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Field</label>
+                                        <select id="simpleFilterField">
+                                            <option value="">All fields</option>
+                                        </select>
+                                    </div>
+                                    <button class="btn" onclick="applySimpleFilter()">Filter</button>
+                                    <button class="btn btn-secondary" onclick="clearFilters()">Clear</button>
+                                </div>
+                            </div>
+
+                            <!-- Advanced Filter -->
+                            <div id="advancedFilter" style="display: none;">
+                                <div id="indexFilterRows">
+                                    <div class="filter-row">
+                                        <div class="form-group field-select">
+                                            <label>Field</label>
+                                            <select class="index-filter-field">
+                                                <option value="">Select field...</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group operator-select">
+                                            <label>Operator</label>
+                                            <select class="index-filter-operator">
+                                                <option value="contains">Contains</option>
+                                                <option value="equals">Equals</option>
+                                                <option value="starts_with">Starts With</option>
+                                                <option value="ends_with">Ends With</option>
+                                                <option value="gt">Greater Than</option>
+                                                <option value="gte">Greater Than or Equal</option>
+                                                <option value="lt">Less Than</option>
+                                                <option value="lte">Less Than or Equal</option>
+                                                <option value="not_equals">Not Equals</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group value-input">
+                                            <label>Value</label>
+                                            <input type="text" class="index-filter-value" placeholder="Enter value...">
+                                        </div>
+                                        <button type="button" class="btn btn-secondary"
+                                            onclick="removeIndexFilterRow(this)">Remove</button>
+                                    </div>
+                                </div>
+
+                                <div style="margin: 16px 0;">
+                                    <button type="button" class="btn btn-secondary" onclick="addIndexFilterRow()">Add
+                                        Filter</button>
+                                    <button type="button" class="btn" onclick="applyAdvancedIndexFilter()">Apply
+                                        Filters</button>
+                                    <button type="button" class="btn btn-secondary" onclick="clearFilters()">Clear
+                                        All</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Data Table -->
+                        <div class="table-responsive">
+                            <table id="indexDataTable" style="display:none;">
+                                <thead>
+                                    <tr id="indexDataTableHead"></tr>
+                                </thead>
+                                <tbody id="indexDataTableBody"></tbody>
+                            </table>
+                            <div id="indexDataLoading" class="loading" style="display:none;">Loading data...</div>
+                            <div id="indexDataError"
+                                style="display:none; text-align:center; color:#ef4444; padding:20px;">
+                                No data found or error loading data.
+                            </div>
+                        </div>
+
+                        <!-- Pagination -->
+                        <div id="indexPagination" style="display:none; margin-top: 20px; text-align: center;">
+                            <button class="btn btn-secondary" onclick="loadIndexPage('prev')" id="prevPageBtn">←
+                                Previous</button>
+                            <span id="pageInfo" style="margin: 0 16px; color: #6b7280;"></span>
+                            <button class="btn btn-secondary" onclick="loadIndexPage('next')" id="nextPageBtn">Next
+                                →</button>
+                        </div>
+                    </div>
+                </section>
+                <!-- Index Management Page -->
+                <section id="page-indexes" style="display:none;">
+                    <div class="card">
+                        <h2>📚 Index Management</h2>
+                        <div class="form-group" style="max-width:350px;">
+                            <label for="indexName">Create New Index</label>
+                            <div style="display:flex; gap:8px;">
+                                <input type="text" id="indexName" placeholder="Index name">
+                                <button class="btn" onclick="createIndex()">Create</button>
+                            </div>
+                        </div>
+                        <div style="margin-top:30px;">
+                            <div class="table-responsive">
+                                <table id="indexesTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th>Documents</th>
+                                            <th>Terms</th>
+                                            <th>Queries</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="indexesTableBody">
+                                        <tr>
+                                            <td colspan="5" class="loading">Loading indexes...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                <!-- Add Data Page -->
+                <section id="page-adddata" style="display:none;">
+                    <div class="card">
+                        <h2>➕ Add Data to Index</h2>
+                        <div class="form-group" style="max-width:350px;">
                             <label for="uploadIndex">Target Index</label>
                             <select id="uploadIndex">
                                 <option value="">Select an index</option>
                             </select>
                         </div>
-
                         <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
-                            <div>📁 Click to select files or drag and drop</div>
-                            <div style="margin-top: 10px; color: #718096;">Supports JSON, CSV files</div>
+                            <div>📁 Click or drag & drop JSON/CSV file</div>
                         </div>
-                        <input type="file" id="fileInput" style="display: none" accept=".json,.csv"
+                        <input type="file" id="fileInput" style="display:none" accept=".json,.csv"
                             onchange="handleFileUpload(event)">
-
-                        <div class="form-group" style="margin-top: 20px;">
-                            <label for="jsonData">Or paste JSON data</label>
+                        <div class="form-group">
+                            <label for="jsonData">Or paste JSON array</label>
                             <textarea id="jsonData" rows="5"
                                 placeholder='[{"title": "Example", "content": "Sample document"}]'></textarea>
                         </div>
-
-                        <button class="btn" onclick="uploadData()">Upload Data</button>
+                        <button class="btn" onclick="uploadData()">Upload</button>
                     </div>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <!-- CRUD Modals -->
+
+    <!-- Create/Edit Document Modal -->
+    <div id="documentModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="documentModalTitle">Add Document</h3>
+                <span class="close" onclick="closeDocumentModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <!-- Form Mode Toggle -->
+                <div class="search-mode-toggle" style="margin-bottom: 20px;">
+                    <button class="active" onclick="toggleFormMode('form', this)">Form Mode</button>
+                    <button onclick="toggleFormMode('json', this)">JSON Mode</button>
+                </div>
+
+                <!-- Dynamic Form -->
+                <div id="dynamicForm">
+                    <div id="dynamicFormFields">
+                        <!-- Dynamic fields will be generated here -->
+                    </div>
+                    <div id="dynamicFormError" class="error" style="display: none;"></div>
+                </div>
+
+                <!-- JSON Editor (fallback) -->
+                <div id="jsonForm" style="display: none;">
+                    <div class="form-group">
+                        <label for="documentData">Document Data (JSON)</label>
+                        <textarea id="documentData" class="json-editor"
+                            placeholder='{"title": "Document Title", "content": "Document content..."}'></textarea>
+                        <div id="documentDataError" class="error" style="display: none;"></div>
+                    </div>
+                </div>
+
+                <div id="documentId" style="display: none;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeDocumentModal()">Cancel</button>
+                <button type="button" class="btn" onclick="saveDocument()" id="saveDocumentBtn">Save Document</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- View Document Modal -->
+    <div id="viewDocumentModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>View Document</h3>
+                <span class="close" onclick="closeViewDocumentModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <pre id="viewDocumentContent"
+                    style="background: #f8f9fa; padding: 16px; border-radius: 6px; overflow-x: auto;"></pre>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeViewDocumentModal()">Close</button>
+                <button type="button" class="btn" onclick="editDocumentFromView()" id="editFromViewBtn">Edit</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="deleteConfirmModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Confirm Delete</h3>
+                <span class="close" onclick="closeDeleteConfirmModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete this document? This action cannot be undone.</p>
+                <div id="deleteDocumentPreview"
+                    style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 12px; margin-top: 12px; max-height: 200px; overflow-y: auto;">
                 </div>
             </div>
-
-            <!-- Search Interface -->
-            <div class="card search-section">
-                <h2>🔍 Advanced Search</h2>
-
-                <div class="search-container">
-                    <div class="search-icon">🔍</div>
-                    <input type="text" class="search-input" id="searchQuery" placeholder="Enter your search query..."
-                        onkeypress="handleSearchKeypress(event)">
-                </div>
-
-                <div class="search-filters">
-                    <div class="form-group">
-                        <label for="searchIndex">Search Index</label>
-                        <select id="searchIndex">
-                            <option value="">All indexes</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="searchSize">Results per page</label>
-                        <select id="searchSize">
-                            <option value="10">10</option>
-                            <option value="20">20</option>
-                            <option value="50">50</option>
-                            <option value="100">100</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="searchType">Search Type</label>
-                        <select id="searchType">
-                            <option value="fuzzy">Fuzzy Search</option>
-                            <option value="exact">Exact Match</option>
-                            <option value="phrase">Phrase Search</option>
-                        </select>
-                    </div>
-                </div>
-
-                <button class="btn" onclick="performSearch()">Search</button>
-
-                <div class="results" id="searchResults"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeDeleteConfirmModal()">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="confirmDeleteDocument()"
+                    id="confirmDeleteBtn">Delete</button>
             </div>
         </div>
     </div>
 
     <script>
         let currentIndexes = [];
+        let currentIndexData = [];
+        let currentIndexName = '';
+        let currentPage = 1;
+        let itemsPerPage = 20;
+        let indexFields = [];
 
-        // Initialize the application
-        document.addEventListener('DOMContentLoaded', function () {
-            loadMetrics();
-            loadIndexes();
-            loadIndexOptions();
-
-            // Set up drag and drop
-            const uploadArea = document.getElementById('uploadArea');
-            uploadArea.addEventListener('dragover', handleDragOver);
-            uploadArea.addEventListener('drop', handleDrop);
-            uploadArea.addEventListener('dragleave', handleDragLeave);
-        });
-
-        // Tab switching functionality
-        function switchTab(tabName) {
-            // Remove active class from all tabs and content
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-
-            // Add active class to selected tab and content
-            event.target.classList.add('active');
-            document.getElementById(tabName + '-tab').classList.add('active');
-
-            if (tabName === 'list') {
-                loadIndexes();
-            }
-        }
-
-        // Load system metrics
-        async function loadMetrics() {
-            try {
-                const response = await fetch('/api/metrics');
-                const metrics = await response.json();
-
-                document.getElementById('totalIndexes').textContent = metrics.total_indexes || 0;
-                document.getElementById('totalDocuments').textContent = metrics.total_documents || 0;
-                document.getElementById('totalQueries').textContent = metrics.total_queries || 0;
-            } catch (error) {
-                console.error('Error loading metrics:', error);
-            }
-        }
-
-        // Load available indexes
-        async function loadIndexes() {
-            const indexList = document.getElementById('indexList');
-            indexList.innerHTML = '<div class="loading"><div class="spinner"></div>Loading indexes...</div>';
-
-            try {
-                const response = await fetch('/api/indexes');
-                const indexes = await response.json();
-                currentIndexes = Object.keys(indexes);
-
-                if (currentIndexes.length === 0) {
-                    indexList.innerHTML = '<div style="text-align: center; color: #718096; padding: 40px;">No indexes found. Create your first index!</div>';
-                    return;
-                }
-
-                let html = '';
-                for (const [name, stats] of Object.entries(indexes)) {
-                    html += `
-                        <div class="index-item">
-                            <div>
-                                <div class="index-name">${name}</div>
-                                <div class="index-stats">
-                                    ${stats.document_count} docs, ${stats.term_count} terms, ${stats.total_queries} queries
-                                </div>
-                            </div>
-                            <button class="btn btn-danger" onclick="deleteIndex('${name}')">Delete</button>
-                        </div>
-                    `;
-                }
-                indexList.innerHTML = html;
-
-                // Update search index options
-                loadIndexOptions();
+        function showPage(page, btn) {
+            document.querySelectorAll('.sidebar-nav button').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+            ['search', 'indexes', 'browse', 'adddata'].forEach(p => {
+                document.getElementById('page-' + p).style.display = (p === page) ? '' : 'none';
+            });
+            if (page === 'indexes') loadIndexes();
+            if (page === 'browse') loadBrowseIndexes();
+            if (page === 'adddata') loadIndexOptions();
+            if (page === 'search') {
                 loadMetrics();
-            } catch (error) {
-                console.error('Error loading indexes:', error);
-                indexList.innerHTML = '<div style="color: red; text-align: center; padding: 20px;">Error loading indexes</div>';
+                loadIndexOptions();
+                loadAdvancedSearchFields();
             }
         }
 
-        // Load index options for dropdowns
-        function loadIndexOptions() {
-            const searchIndex = document.getElementById('searchIndex');
-            const uploadIndex = document.getElementById('uploadIndex');
+        // Search Mode Toggle
+        function toggleSearchMode(mode, btn) {
+            document.querySelectorAll('.search-mode-toggle button').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
 
-            // Clear existing options (except first)
-            searchIndex.innerHTML = '<option value="">All indexes</option>';
-            uploadIndex.innerHTML = '<option value="">Select an index</option>';
+            const simpleForm = document.getElementById('simpleSearchForm');
+            const advancedSearch = document.getElementById('advancedSearch');
 
-            currentIndexes.forEach(index => {
-                searchIndex.innerHTML += `<option value="${index}">${index}</option>`;
-                uploadIndex.innerHTML += `<option value="${index}">${index}</option>`;
+            if (mode === 'simple') {
+                simpleForm.style.display = 'block';
+                advancedSearch.style.display = 'none';
+            } else {
+                simpleForm.style.display = 'none';
+                advancedSearch.style.display = 'block';
+                loadAdvancedSearchFields();
+            }
+        }
+
+        // Filter Mode Toggle for index browsing
+        function toggleFilterMode(mode, btn) {
+            document.querySelectorAll('.search-mode-toggle button').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            const simpleFilter = document.getElementById('simpleFilter');
+            const advancedFilter = document.getElementById('advancedFilter');
+
+            if (mode === 'simple') {
+                simpleFilter.style.display = 'block';
+                advancedFilter.style.display = 'none';
+            } else {
+                simpleFilter.style.display = 'none';
+                advancedFilter.style.display = 'block';
+            }
+        }
+
+        // Advanced Search Functions
+        function loadAdvancedSearchFields() {
+            const indexSelect = document.getElementById('advancedIndex');
+            const indexName = indexSelect.value;
+
+            if (!indexName) return;
+
+            // Load field options for the selected index
+            // This would typically come from the backend
+            const fieldSelects = document.querySelectorAll('.filter-field');
+            fieldSelects.forEach(select => {
+                select.innerHTML = '<option value="">Select field...</option>';
+                // Add common fields (this should come from backend)
+                ['title', 'content', 'category', 'author', 'date', 'tags'].forEach(field => {
+                    select.innerHTML += `<option value="${field}">${field}</option>`;
+                });
             });
         }
 
-        // Create a new index
-        async function createIndex() {
-            const name = document.getElementById('indexName').value.trim();
-            if (!name) {
-                alert('Please enter an index name');
-                return;
-            }
+        function addFilterRow() {
+            const filterRows = document.getElementById('filterRows');
+            const newRow = document.createElement('div');
+            newRow.className = 'filter-row';
+            newRow.innerHTML = `
+                <div class="form-group field-select">
+                    <label>Field</label>
+                    <select class="filter-field">
+                        <option value="">Select field...</option>
+                        <option value="title">title</option>
+                        <option value="content">content</option>
+                        <option value="category">category</option>
+                        <option value="author">author</option>
+                        <option value="date">date</option>
+                        <option value="tags">tags</option>
+                    </select>
+                </div>
+                <div class="form-group operator-select">
+                    <label>Operator</label>
+                    <select class="filter-operator">
+                        <option value="contains">Contains</option>
+                        <option value="equals">Equals</option>
+                        <option value="starts_with">Starts With</option>
+                        <option value="ends_with">Ends With</option>
+                        <option value="gt">Greater Than</option>
+                        <option value="gte">Greater Than or Equal</option>
+                        <option value="lt">Less Than</option>
+                        <option value="lte">Less Than or Equal</option>
+                        <option value="not_equals">Not Equals</option>
+                        <option value="in">In List</option>
+                        <option value="not_in">Not In List</option>
+                        <option value="regex">Regex Match</option>
+                    </select>
+                </div>
+                <div class="form-group value-input">
+                    <label>Value</label>
+                    <input type="text" class="filter-value" placeholder="Enter value...">
+                </div>
+                <button type="button" class="btn btn-secondary" onclick="removeFilterRow(this)">Remove</button>
+            `;
+            filterRows.appendChild(newRow);
+        }
 
-            try {
-                const response = await fetch(`/api/index/create?name=${encodeURIComponent(name)}`, {
-                    method: 'POST'
-                });
-
-                if (response.ok) {
-                    alert('Index created successfully!');
-                    document.getElementById('indexName').value = '';
-                    loadIndexes();
-                } else {
-                    const error = await response.text();
-                    alert('Error creating index: ' + error);
-                }
-            } catch (error) {
-                console.error('Error creating index:', error);
-                alert('Error creating index');
+        function removeFilterRow(btn) {
+            const filterRows = document.getElementById('filterRows');
+            if (filterRows.children.length > 1) {
+                btn.closest('.filter-row').remove();
             }
         }
 
-        // Delete an index
-        async function deleteIndex(name) {
-            if (!confirm(`Are you sure you want to delete index "${name}"?`)) {
+        async function performAdvancedSearch() {
+            const indexName = document.getElementById('advancedIndex').value;
+            const queryLogic = document.getElementById('queryLogic').value;
+
+            if (!indexName) {
+                alert('Please select an index');
                 return;
             }
 
+            // Collect all filter conditions
+            const filters = [];
+            const filterRows = document.querySelectorAll('#filterRows .filter-row');
+
+            filterRows.forEach(row => {
+                const field = row.querySelector('.filter-field').value;
+                const operator = row.querySelector('.filter-operator').value;
+                const value = row.querySelector('.filter-value').value.trim();
+
+                if (field && operator && value) {
+                    filters.push({ field, operator, value });
+                }
+            });
+
+            if (filters.length === 0) {
+                alert('Please add at least one filter condition');
+                return;
+            }
+
+            showSearchResults();
+
             try {
-                const response = await fetch(`/api/index/${encodeURIComponent(name)}`, {
+                // Build the advanced search request
+                const searchParams = {
+                    filters: filters,
+                    match: queryLogic,
+                    size: 20
+                };
+
+                const response = await fetch(`/api/search/${encodeURIComponent(indexName)}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(searchParams)
+                });
+
+                const results = await response.json();
+                displaySearchResults(results);
+            } catch (error) {
+                document.getElementById('searchResults').textContent = 'Advanced search failed.';
+            }
+        }
+
+        // Browse Indexes Functions
+        async function loadBrowseIndexes() {
+            const listDiv = document.getElementById('browseIndexesList');
+            listDiv.innerHTML = '<div class="loading">Loading indexes...</div>';
+
+            try {
+                const res = await fetch('/api/indexes');
+                const indexes = await res.json();
+
+                if (Object.keys(indexes).length === 0) {
+                    listDiv.innerHTML = '<div style="text-align:center;color:#888;padding:40px;">No indexes found.</div>';
+                    return;
+                }
+
+                let html = '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px;">';
+
+                for (const [name, stats] of Object.entries(indexes)) {
+                    html += `
+                        <div class="card" style="cursor: pointer; transition: transform 0.2s; margin: 0;"
+                             onclick="showIndexDetail('${name}')"
+                             onmouseover="this.style.transform='translateY(-2px)'"
+                             onmouseout="this.style.transform='translateY(0)'">
+                            <h3 style="margin: 0 0 12px 0; color: var(--primary);">📊 ${name}</h3>
+                            <div style="color: #6b7280; font-size: 0.9rem;">
+                                <div>📄 ${stats.document_count || 0} documents</div>
+                                <div>🔤 ${stats.term_count || 0} terms</div>
+                                <div>🔍 ${stats.total_queries || 0} queries</div>
+                                <div style="margin-top: 8px; color: #9ca3af; font-size: 0.8rem;">
+                                    Last accessed: ${stats.last_accessed ? new Date(stats.last_accessed).toLocaleDateString() : 'Never'}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                html += '</div>';
+                listDiv.innerHTML = html;
+
+            } catch (error) {
+                listDiv.innerHTML = '<div style="color:red;text-align:center;padding:40px;">Error loading indexes</div>';
+            }
+        }
+
+        async function showIndexDetail(indexName) {
+            currentIndexName = indexName;
+            currentPage = 1;
+
+            // Hide list view, show detail view
+            document.getElementById('indexListView').style.display = 'none';
+            document.getElementById('indexDetailView').style.display = 'block';
+
+            // Update header
+            document.getElementById('indexDetailTitle').textContent = `📊 ${indexName}`;
+
+            // Load index data
+            await loadIndexData(indexName);
+        }
+
+        function showIndexList() {
+            document.getElementById('indexListView').style.display = 'block';
+            document.getElementById('indexDetailView').style.display = 'none';
+            currentIndexName = '';
+        }
+
+        async function loadIndexData(indexName, page = 1, filters = []) {
+            const loadingDiv = document.getElementById('indexDataLoading');
+            const errorDiv = document.getElementById('indexDataError');
+            const table = document.getElementById('indexDataTable');
+
+            loadingDiv.style.display = 'block';
+            errorDiv.style.display = 'none';
+            table.style.display = 'none';
+
+            try {
+                // This would be a custom endpoint to get index data with pagination
+                const params = new URLSearchParams({
+                    page: page,
+                    size: itemsPerPage
+                });
+
+                if (filters.length > 0) {
+                    params.append('filters', JSON.stringify(filters));
+                }
+
+                const response = await fetch(`/api/index/${encodeURIComponent(indexName)}/data?${params.toString()}`);
+
+                if (!response.ok) {
+                    throw new Error('Failed to load data');
+                }
+
+                const data = await response.json();
+                currentIndexData = data.items || [];
+
+                displayIndexData(data);
+                setupIndexPagination(data);
+
+                // Update stats
+                document.getElementById('indexDetailStats').textContent =
+                    `${data.total || 0} total documents • Page ${page} of ${Math.ceil((data.total || 0) / itemsPerPage)}`;
+
+                // Load fields for filtering
+                if (currentIndexData.length > 0) {
+                    loadIndexFields(currentIndexData[0]);
+                }
+
+            } catch (error) {
+                loadingDiv.style.display = 'none';
+                errorDiv.style.display = 'block';
+                errorDiv.textContent = 'Error loading index data: ' + error.message;
+            }
+        }
+
+        function displayIndexData(data) {
+            const table = document.getElementById('indexDataTable');
+            const thead = document.getElementById('indexDataTableHead');
+            const tbody = document.getElementById('indexDataTableBody');
+            const loadingDiv = document.getElementById('indexDataLoading');
+
+            loadingDiv.style.display = 'none';
+
+            if (!data.items || data.items.length === 0) {
+                document.getElementById('indexDataError').style.display = 'block';
+                return;
+            }
+
+            // Setup table headers
+            const firstItem = data.items[0];
+            const fields = Object.keys(firstItem).filter(key => key !== 'id');
+
+            thead.innerHTML = fields.map(field => '<th>' + field.charAt(0).toUpperCase() + field.slice(1) + '</th>').join('') + '<th>Actions</th>';
+
+            // Setup table body with action buttons
+            tbody.innerHTML = data.items.map((item, index) => {
+                const docId = item.id || index; // Use item.id if available, otherwise use index
+                const itemJson = JSON.stringify(item);
+                return '<tr>' + fields.map(field => {
+                    let value = item[field];
+                    if (typeof value === 'string' && value.length > 100) {
+                        value = value.substring(0, 100) + '...';
+                    }
+                    return '<td>' + highlightText(value, '') + '</td>';
+                }).join('') +
+                    '<td>' +
+                    '<div class="data-actions">' +
+                    '<button class="btn btn-secondary" onclick="viewDocument(' + index + ')" title="View">👁️</button>' +
+                    '<button class="btn btn-secondary" onclick="editDocument(' + index + ')" title="Edit">✏️</button>' +
+                    '<button class="btn btn-danger" onclick="deleteDocument(' + index + ')" title="Delete">🗑️</button>' +
+                    '</div>' +
+                    '</td></tr>';
+            }).join('');
+
+            table.style.display = 'table';
+        } function loadIndexFields(sampleItem) {
+            indexFields = Object.keys(sampleItem).filter(key => key !== 'id');
+
+            // Update field selects
+            const fieldSelects = [
+                ...document.querySelectorAll('.index-filter-field'),
+                document.getElementById('simpleFilterField')
+            ];
+
+            fieldSelects.forEach(select => {
+                if (select) {
+                    const currentValue = select.value;
+                    select.innerHTML = '<option value="">Select field...</option>';
+                    indexFields.forEach(field => {
+                        select.innerHTML += `<option value="${field}">${field}</option>`;
+                    });
+                    select.value = currentValue;
+                }
+            });
+
+            // Update simple filter field select
+            const simpleFilterField = document.getElementById('simpleFilterField');
+            if (simpleFilterField) {
+                simpleFilterField.innerHTML = '<option value="">All fields</option>';
+                indexFields.forEach(field => {
+                    simpleFilterField.innerHTML += `<option value="${field}">${field}</option>`;
+                });
+            }
+
+            // Generate quick filters
+            generateQuickFilters(sampleItem);
+        }
+
+        function generateQuickFilters(sampleItem) {
+            const quickFiltersDiv = document.getElementById('quickFilters');
+            let html = '';
+
+            // Add some predefined quick filters based on common field types
+            indexFields.forEach(field => {
+                const value = sampleItem[field];
+                if (typeof value === 'string' && value.length < 20) {
+                    html += `<div class="quick-filter" onclick="applyQuickFilter('${field}', '${value}')">${field}: ${value}</div>`;
+                }
+            });
+
+            quickFiltersDiv.innerHTML = html;
+        }
+
+        function applyQuickFilter(field, value) {
+            document.getElementById('simpleFilterField').value = field;
+            document.getElementById('simpleFilterQuery').value = value;
+            applySimpleFilter();
+        }
+
+        function applySimpleFilter() {
+            const query = document.getElementById('simpleFilterQuery').value.trim();
+            const field = document.getElementById('simpleFilterField').value;
+
+            if (!query) {
+                loadIndexData(currentIndexName, 1);
+                return;
+            }
+
+            const filters = [{
+                field: field || 'all',
+                operator: 'contains',
+                value: query
+            }];
+
+            loadIndexData(currentIndexName, 1, filters);
+        }
+
+        function clearFilters() {
+            document.getElementById('simpleFilterQuery').value = '';
+            document.getElementById('simpleFilterField').value = '';
+
+            // Clear advanced filters
+            const advancedRows = document.querySelectorAll('#indexFilterRows .filter-row');
+            if (advancedRows.length > 1) {
+                for (let i = 1; i < advancedRows.length; i++) {
+                    advancedRows[i].remove();
+                }
+            }
+
+            // Clear first row
+            if (advancedRows.length > 0) {
+                advancedRows[0].querySelector('.index-filter-field').value = '';
+                advancedRows[0].querySelector('.index-filter-operator').value = 'contains';
+                advancedRows[0].querySelector('.index-filter-value').value = '';
+            }
+
+            loadIndexData(currentIndexName, 1);
+        }
+
+        // Advanced index filtering
+        function addIndexFilterRow() {
+            const filterRows = document.getElementById('indexFilterRows');
+            const newRow = document.createElement('div');
+            newRow.className = 'filter-row';
+            newRow.innerHTML = `
+                <div class="form-group field-select">
+                    <label>Field</label>
+                    <select class="index-filter-field">
+                        <option value="">Select field...</option>
+                        ${indexFields.map(field => `<option value="${field}">${field}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="form-group operator-select">
+                    <label>Operator</label>
+                    <select class="index-filter-operator">
+                        <option value="contains">Contains</option>
+                        <option value="equals">Equals</option>
+                        <option value="starts_with">Starts With</option>
+                        <option value="ends_with">Ends With</option>
+                        <option value="gt">Greater Than</option>
+                        <option value="gte">Greater Than or Equal</option>
+                        <option value="lt">Less Than</option>
+                        <option value="lte">Less Than or Equal</option>
+                        <option value="not_equals">Not Equals</option>
+                    </select>
+                </div>
+                <div class="form-group value-input">
+                    <label>Value</label>
+                    <input type="text" class="index-filter-value" placeholder="Enter value...">
+                </div>
+                <button type="button" class="btn btn-secondary" onclick="removeIndexFilterRow(this)">Remove</button>
+            `;
+            filterRows.appendChild(newRow);
+        }
+
+        function removeIndexFilterRow(btn) {
+            const filterRows = document.getElementById('indexFilterRows');
+            if (filterRows.children.length > 1) {
+                btn.closest('.filter-row').remove();
+            }
+        }
+
+        function applyAdvancedIndexFilter() {
+            const filters = [];
+            const filterRows = document.querySelectorAll('#indexFilterRows .filter-row');
+
+            filterRows.forEach(row => {
+                const field = row.querySelector('.index-filter-field').value;
+                const operator = row.querySelector('.index-filter-operator').value;
+                const value = row.querySelector('.index-filter-value').value.trim();
+
+                if (field && operator && value) {
+                    filters.push({ field, operator, value });
+                }
+            });
+
+            loadIndexData(currentIndexName, 1, filters);
+        }
+
+        function setupIndexPagination(data) {
+            const pagination = document.getElementById('indexPagination');
+            const pageInfo = document.getElementById('pageInfo');
+            const prevBtn = document.getElementById('prevPageBtn');
+            const nextBtn = document.getElementById('nextPageBtn');
+
+            if (!data.total || data.total <= itemsPerPage) {
+                pagination.style.display = 'none';
+                return;
+            }
+
+            pagination.style.display = 'block';
+
+            const totalPages = Math.ceil(data.total / itemsPerPage);
+            pageInfo.textContent = `Page ${currentPage} of ${totalPages} (${data.total} total)`;
+
+            prevBtn.disabled = currentPage <= 1;
+            nextBtn.disabled = currentPage >= totalPages;
+        }
+
+        function loadIndexPage(direction) {
+            if (direction === 'next') {
+                currentPage++;
+            } else if (direction === 'prev') {
+                currentPage--;
+            }
+
+            loadIndexData(currentIndexName, currentPage);
+        }
+
+        function refreshIndexData() {
+            if (currentIndexName) {
+                loadIndexData(currentIndexName, currentPage);
+            }
+        }
+
+        function exportIndexData() {
+            if (currentIndexData.length === 0) {
+                alert('No data to export');
+                return;
+            }
+
+            const dataStr = JSON.stringify(currentIndexData, null, 2);
+            const dataBlob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(dataBlob);
+
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `${currentIndexName}_data.json`;
+            link.click();
+
+            URL.revokeObjectURL(url);
+        }
+
+        // CRUD Operations for Documents
+        let currentDocumentIndex = -1;
+        let currentFormMode = 'form';
+        let documentSchema = {};
+
+        // Form Mode Toggle
+        function toggleFormMode(mode, btn) {
+            document.querySelectorAll('.search-mode-toggle button').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            const dynamicForm = document.getElementById('dynamicForm');
+            const jsonForm = document.getElementById('jsonForm');
+
+            currentFormMode = mode;
+
+            if (mode === 'form') {
+                dynamicForm.style.display = 'block';
+                jsonForm.style.display = 'none';
+            } else {
+                dynamicForm.style.display = 'none';
+                jsonForm.style.display = 'block';
+
+                // Sync form data to JSON if switching from form mode
+                if (Object.keys(documentSchema).length > 0) {
+                    const formData = collectFormData();
+                    document.getElementById('documentData').value = JSON.stringify(formData, null, 2);
+                }
+            }
+        }
+
+        // Analyze data types from sample documents
+        function analyzeDocumentSchema(sampleData) {
+            const schema = {};
+            const samples = Array.isArray(sampleData) ? sampleData : [sampleData];
+
+            if (samples.length === 0) return schema;
+
+            // Analyze first few documents to determine field types
+            const fieldsAnalysis = {};
+            samples.slice(0, Math.min(5, samples.length)).forEach(doc => {
+                Object.keys(doc).forEach(key => {
+                    if (key === 'id') return; // Skip ID field
+
+                    if (!fieldsAnalysis[key]) {
+                        fieldsAnalysis[key] = [];
+                    }
+                    fieldsAnalysis[key].push(typeof doc[key]);
+                });
+            });
+
+            // Determine most common type for each field
+            Object.keys(fieldsAnalysis).forEach(field => {
+                const types = fieldsAnalysis[field];
+                const typeCount = {};
+                types.forEach(type => {
+                    typeCount[type] = (typeCount[type] || 0) + 1;
+                });
+
+                // Find most common type
+                const mostCommonType = Object.keys(typeCount).reduce((a, b) =>
+                    typeCount[a] > typeCount[b] ? a : b
+                );
+
+                // Get sample values for this field
+                const sampleValues = samples.map(doc => doc[field]).filter(val => val !== undefined);
+                const uniqueValues = [...new Set(sampleValues)];
+
+                schema[field] = {
+                    type: mostCommonType,
+                    required: sampleValues.length === samples.length,
+                    sampleValues: uniqueValues.slice(0, 5)
+                };
+
+                // Smart field type detection based on field name and content
+                if (mostCommonType === 'string') {
+                    const fieldLower = field.toLowerCase();
+                    const sampleValuesStr = sampleValues.map(v => String(v));
+
+                    // Email detection (field name or content pattern)
+                    if (fieldLower.includes('email') || fieldLower.includes('mail') ||
+                        sampleValuesStr.some(val => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val))) {
+                        schema[field].inputType = 'email';
+                    }
+                    // Password detection
+                    else if (fieldLower.includes('password') || fieldLower.includes('pass')) {
+                        schema[field].inputType = 'password';
+                    }
+                    // URL detection (field name or content pattern)
+                    else if (fieldLower.includes('url') || fieldLower.includes('link') || fieldLower.includes('website') ||
+                        sampleValuesStr.some(val => /^https?:\/\/.+/.test(val))) {
+                        schema[field].inputType = 'url';
+                    }
+                    // Phone number detection
+                    else if (fieldLower.includes('phone') || fieldLower.includes('mobile') || fieldLower.includes('tel') ||
+                        sampleValuesStr.some(val => /^[\+]?[\d\s\-\(\)]{10,}$/.test(val))) {
+                        schema[field].inputType = 'tel';
+                    }
+                    // Date detection (field name or ISO date pattern)
+                    else if (fieldLower.includes('date') || fieldLower.includes('time') || fieldLower.includes('created') ||
+                        fieldLower.includes('updated') || fieldLower.includes('birth') ||
+                        sampleValuesStr.some(val => /^\d{4}-\d{2}-\d{2}/.test(val) || !isNaN(Date.parse(val)))) {
+                        schema[field].inputType = 'datetime-local';
+                    }
+                    // Color detection
+                    else if (fieldLower.includes('color') || fieldLower.includes('colour') ||
+                        sampleValuesStr.some(val => /^#[0-9A-Fa-f]{6}$/.test(val))) {
+                        schema[field].inputType = 'color';
+                    }
+                    // Long text fields (content, description, notes, etc.)
+                    else if (fieldLower.includes('content') || fieldLower.includes('description') ||
+                        fieldLower.includes('note') || fieldLower.includes('comment') ||
+                        fieldLower.includes('text') || fieldLower.includes('body') ||
+                        fieldLower.includes('message') || fieldLower.includes('summary') ||
+                        sampleValuesStr.some(val => val.length > 100)) {
+                        schema[field].inputType = 'textarea';
+                    }
+                    // Select dropdown for categorical data with limited unique values
+                    else if (uniqueValues.length <= 10 && uniqueValues.length >= 2 &&
+                        sampleValues.length >= uniqueValues.length * 2 && // Each value appears at least twice on average
+                        (fieldLower.includes('status') || fieldLower.includes('type') ||
+                            fieldLower.includes('category') || fieldLower.includes('role') ||
+                            fieldLower.includes('priority') || fieldLower.includes('level') ||
+                            fieldLower.includes('grade') || fieldLower.includes('class'))) {
+                        schema[field].inputType = 'select';
+                        schema[field].options = uniqueValues;
+                    }
+                    // Regular text input for names, titles, short strings
+                    else {
+                        schema[field].inputType = 'text';
+                    }
+                }
+                else if (mostCommonType === 'number') {
+                    const fieldLower = field.toLowerCase();
+
+                    // Age, count, quantity fields
+                    if (fieldLower.includes('age') || fieldLower.includes('count') ||
+                        fieldLower.includes('quantity') || fieldLower.includes('amount')) {
+                        schema[field].inputType = 'number';
+                        schema[field].min = 0;
+                        if (fieldLower.includes('age')) {
+                            schema[field].max = 150;
+                        }
+                    }
+                    // Price, cost, salary fields
+                    else if (fieldLower.includes('price') || fieldLower.includes('cost') ||
+                        fieldLower.includes('salary') || fieldLower.includes('wage') ||
+                        fieldLower.includes('fee') || fieldLower.includes('total')) {
+                        schema[field].inputType = 'number';
+                        schema[field].min = 0;
+                        schema[field].step = 0.01;
+                    }
+                    // Rating, score fields
+                    else if (fieldLower.includes('rating') || fieldLower.includes('score') ||
+                        fieldLower.includes('rank')) {
+                        schema[field].inputType = 'number';
+                        schema[field].min = 0;
+                        schema[field].max = Math.max(...sampleValues) <= 10 ? 10 : 100;
+                        schema[field].step = 0.1;
+                    }
+                    // Percentage fields
+                    else if (fieldLower.includes('percent') || fieldLower.includes('rate') ||
+                        fieldLower.includes('ratio')) {
+                        schema[field].inputType = 'number';
+                        schema[field].min = 0;
+                        schema[field].max = 100;
+                        schema[field].step = 0.1;
+                    }
+                    else {
+                        schema[field].inputType = 'number';
+                        schema[field].step = 'any';
+                    }
+                }
+                else if (mostCommonType === 'boolean') {
+                    schema[field].inputType = 'checkbox';
+                }
+                else if (mostCommonType === 'object') {
+                    if (Array.isArray(sampleValues[0])) {
+                        schema[field].inputType = 'array';
+                        schema[field].itemType = sampleValues[0].length > 0 ? typeof sampleValues[0][0] : 'string';
+                    } else {
+                        schema[field].inputType = 'object';
+                    }
+                }
+            });
+
+            return schema;
+        }
+
+        // Generate dynamic form based on schema
+        function generateDynamicForm(schema, data = {}) {
+            const container = document.getElementById('dynamicFormFields');
+            container.innerHTML = '';
+
+            Object.keys(schema).forEach(fieldName => {
+                const fieldInfo = schema[fieldName];
+                const fieldValue = data[fieldName];
+
+                const fieldDiv = document.createElement('div');
+                fieldDiv.className = 'dynamic-field';
+
+                const label = document.createElement('label');
+                label.textContent = fieldName.charAt(0).toUpperCase() + fieldName.slice(1);
+
+                // Add type indicator
+                const typeSpan = document.createElement('span');
+                typeSpan.className = 'field-type-indicator';
+                typeSpan.textContent = `(${fieldInfo.type})`;
+                label.appendChild(typeSpan);
+
+                if (fieldInfo.required) {
+                    label.innerHTML += ' <span style="color: #ef4444;">*</span>';
+                }
+
+                fieldDiv.appendChild(label);
+
+                // Generate input based on type
+                const input = createFieldInput(fieldName, fieldInfo, fieldValue);
+                fieldDiv.appendChild(input);
+
+                container.appendChild(fieldDiv);
+            });
+        }
+
+        // Create appropriate input field based on type
+        function createFieldInput(fieldName, fieldInfo, value) {
+            const { inputType, type, options, itemType, min, max, step } = fieldInfo;
+
+            switch (inputType) {
+                case 'textarea':
+                    const textarea = document.createElement('textarea');
+                    textarea.id = `field_${fieldName}`;
+                    textarea.name = fieldName;
+                    textarea.rows = 4;
+                    textarea.value = value || '';
+                    textarea.placeholder = `Enter ${fieldName}...`;
+                    return textarea;
+
+                case 'select':
+                    const select = document.createElement('select');
+                    select.id = `field_${fieldName}`;
+                    select.name = fieldName;
+
+                    const defaultOption = document.createElement('option');
+                    defaultOption.value = '';
+                    defaultOption.textContent = `Select ${fieldName}...`;
+                    select.appendChild(defaultOption);
+
+                    options.forEach(option => {
+                        const optionEl = document.createElement('option');
+                        optionEl.value = option;
+                        optionEl.textContent = option;
+                        if (value === option) optionEl.selected = true;
+                        select.appendChild(optionEl);
+                    });
+                    return select;
+
+                case 'checkbox':
+                    const checkboxDiv = document.createElement('div');
+                    checkboxDiv.className = 'checkbox-field';
+
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.id = `field_${fieldName}`;
+                    checkbox.name = fieldName;
+                    checkbox.checked = !!value;
+
+                    const checkboxLabel = document.createElement('label');
+                    checkboxLabel.textContent = `Enable ${fieldName}`;
+                    checkboxLabel.setAttribute('for', checkbox.id);
+
+                    checkboxDiv.appendChild(checkbox);
+                    checkboxDiv.appendChild(checkboxLabel);
+                    return checkboxDiv;
+
+                case 'array':
+                    return createArrayField(fieldName, fieldInfo, value);
+
+                case 'object':
+                    return createObjectField(fieldName, fieldInfo, value);
+
+                case 'datetime-local':
+                    const dateTimeInput = document.createElement('input');
+                    dateTimeInput.type = 'datetime-local';
+                    dateTimeInput.id = `field_${fieldName}`;
+                    dateTimeInput.name = fieldName;
+                    if (value) {
+                        // Convert to datetime-local format
+                        const date = new Date(value);
+                        if (!isNaN(date.getTime())) {
+                            // Format: YYYY-MM-DDTHH:MM
+                            const year = date.getFullYear();
+                            const month = String(date.getMonth() + 1).padStart(2, '0');
+                            const day = String(date.getDate()).padStart(2, '0');
+                            const hours = String(date.getHours()).padStart(2, '0');
+                            const minutes = String(date.getMinutes()).padStart(2, '0');
+                            dateTimeInput.value = `${year}-${month}-${day}T${hours}:${minutes}`;
+                        }
+                    }
+                    return dateTimeInput;
+
+                case 'color':
+                    const colorInput = document.createElement('input');
+                    colorInput.type = 'color';
+                    colorInput.id = `field_${fieldName}`;
+                    colorInput.name = fieldName;
+                    colorInput.value = value || '#000000';
+                    return colorInput;
+
+                case 'password':
+                    const passwordInput = document.createElement('input');
+                    passwordInput.type = 'password';
+                    passwordInput.id = `field_${fieldName}`;
+                    passwordInput.name = fieldName;
+                    passwordInput.value = value || '';
+                    passwordInput.placeholder = `Enter ${fieldName}...`;
+                    return passwordInput;
+
+                case 'tel':
+                    const telInput = document.createElement('input');
+                    telInput.type = 'tel';
+                    telInput.id = `field_${fieldName}`;
+                    telInput.name = fieldName;
+                    telInput.value = value || '';
+                    telInput.placeholder = `Enter ${fieldName}...`;
+                    return telInput;
+
+                case 'date':
+                    const dateInput = document.createElement('input');
+                    dateInput.type = 'date';
+                    dateInput.id = `field_${fieldName}`;
+                    dateInput.name = fieldName;
+                    if (value) {
+                        // Convert to YYYY-MM-DD format
+                        const date = new Date(value);
+                        if (!isNaN(date.getTime())) {
+                            dateInput.value = date.toISOString().split('T')[0];
+                        }
+                    }
+                    return dateInput;
+
+                case 'email':
+                case 'url':
+                case 'number':
+                case 'text':
+                default:
+                    const input = document.createElement('input');
+                    input.type = inputType === 'email' ? 'email' :
+                        inputType === 'url' ? 'url' :
+                            inputType === 'number' ? 'number' : 'text';
+                    input.id = `field_${fieldName}`;
+                    input.name = fieldName;
+                    input.value = value || '';
+                    input.placeholder = `Enter ${fieldName}...`;
+
+                    // Add number-specific attributes
+                    if (inputType === 'number') {
+                        if (min !== undefined) input.min = min;
+                        if (max !== undefined) input.max = max;
+                        if (step !== undefined) input.step = step;
+                        else input.step = 'any';
+                    }
+
+                    return input;
+            }
+        }
+
+        // Create array field input
+        function createArrayField(fieldName, fieldInfo, value = []) {
+            const arrayDiv = document.createElement('div');
+            arrayDiv.className = 'array-field';
+
+            const header = document.createElement('div');
+            header.className = 'array-field-header';
+            header.innerHTML = `
+                <span>Items (${fieldInfo.itemType})</span>
+                <button type="button" class="btn btn-secondary add-array-item" onclick="addArrayItem('${fieldName}', '${fieldInfo.itemType}')">Add Item</button>
+            `;
+            arrayDiv.appendChild(header);
+
+            const itemsContainer = document.createElement('div');
+            itemsContainer.id = `array_${fieldName}`;
+            arrayDiv.appendChild(itemsContainer);
+
+            // Add existing items
+            if (Array.isArray(value)) {
+                value.forEach((item, index) => {
+                    addArrayItemElement(fieldName, fieldInfo.itemType, item, itemsContainer);
+                });
+            }
+
+            // Add at least one empty item
+            if (!value || value.length === 0) {
+                addArrayItemElement(fieldName, fieldInfo.itemType, '', itemsContainer);
+            }
+
+            return arrayDiv;
+        }
+
+        // Add array item element
+        function addArrayItemElement(fieldName, itemType, value, container) {
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'array-item';
+
+            const input = document.createElement('input');
+            input.type = itemType === 'number' ? 'number' : 'text';
+            input.name = `${fieldName}[]`;
+            input.value = value || '';
+            input.placeholder = `Enter ${itemType} value...`;
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'btn btn-danger';
+            removeBtn.textContent = 'Remove';
+            removeBtn.onclick = () => itemDiv.remove();
+
+            itemDiv.appendChild(input);
+            itemDiv.appendChild(removeBtn);
+            container.appendChild(itemDiv);
+        }
+
+        // Add array item (called from button)
+        function addArrayItem(fieldName, itemType) {
+            const container = document.getElementById(`array_${fieldName}`);
+            addArrayItemElement(fieldName, itemType, '', container);
+        }
+
+        // Create object field input
+        function createObjectField(fieldName, fieldInfo, value = {}) {
+            const objectDiv = document.createElement('div');
+            objectDiv.className = 'object-field';
+
+            const header = document.createElement('div');
+            header.innerHTML = `<strong>Object Properties</strong>`;
+            objectDiv.appendChild(header);
+
+            // For now, just show as JSON textarea
+            const textarea = document.createElement('textarea');
+            textarea.id = `field_${fieldName}`;
+            textarea.name = fieldName;
+            textarea.rows = 4;
+            textarea.value = JSON.stringify(value || {}, null, 2);
+            textarea.placeholder = `Enter ${fieldName} as JSON object...`;
+
+            objectDiv.appendChild(textarea);
+            return objectDiv;
+        }
+
+        // Collect form data
+        function collectFormData() {
+            const formData = {};
+            const container = document.getElementById('dynamicFormFields');
+
+            container.querySelectorAll('[name]').forEach(input => {
+                const name = input.name.replace('[]', '');
+
+                if (input.type === 'checkbox') {
+                    formData[name] = input.checked;
+                } else if (input.name.includes('[]')) {
+                    // Array field
+                    if (!formData[name]) formData[name] = [];
+                    if (input.value.trim()) {
+                        const value = input.type === 'number' ? parseFloat(input.value) : input.value;
+                        formData[name].push(value);
+                    }
+                } else if (input.type === 'number') {
+                    formData[name] = input.value ? parseFloat(input.value) : null;
+                } else if (input.name in documentSchema && documentSchema[input.name].inputType === 'object') {
+                    // Object field - parse JSON
+                    try {
+                        formData[name] = input.value ? JSON.parse(input.value) : {};
+                    } catch (e) {
+                        formData[name] = input.value;
+                    }
+                } else {
+                    formData[name] = input.value;
+                }
+            });
+
+            // Clean up empty values
+            Object.keys(formData).forEach(key => {
+                if (formData[key] === '' || formData[key] === null) {
+                    delete formData[key];
+                }
+            });
+
+            return formData;
+        }
+
+        function showCreateDocumentModal() {
+            if (!currentIndexName) {
+                alert('Please select an index first');
+                return;
+            }
+
+            document.getElementById('documentModalTitle').textContent = 'Add Document';
+            document.getElementById('documentData').value = '';
+            document.getElementById('documentDataError').style.display = 'none';
+            document.getElementById('dynamicFormError').style.display = 'none';
+            document.getElementById('documentId').style.display = 'none';
+            document.getElementById('saveDocumentBtn').textContent = 'Save Document';
+            currentDocumentIndex = -1;
+
+            // Generate form based on existing data in the index
+            if (currentIndexData.length > 0) {
+                documentSchema = analyzeDocumentSchema(currentIndexData);
+                generateDynamicForm(documentSchema);
+                currentFormMode = 'form';
+
+                // Set form mode as default
+                document.querySelector('.search-mode-toggle button').classList.add('active');
+                document.querySelectorAll('.search-mode-toggle button')[1].classList.remove('active');
+                document.getElementById('dynamicForm').style.display = 'block';
+                document.getElementById('jsonForm').style.display = 'none';
+            } else {
+                // No data to analyze, use JSON mode
+                currentFormMode = 'json';
+                document.querySelector('.search-mode-toggle button').classList.remove('active');
+                document.querySelectorAll('.search-mode-toggle button')[1].classList.add('active');
+                document.getElementById('dynamicForm').style.display = 'none';
+                document.getElementById('jsonForm').style.display = 'block';
+            }
+
+            document.getElementById('documentModal').style.display = 'block';
+        }
+
+        function viewDocument(index) {
+            if (currentIndexData[index]) {
+                const doc = currentIndexData[index];
+                document.getElementById('viewDocumentContent').textContent = JSON.stringify(doc, null, 2);
+                currentDocumentIndex = index;
+                document.getElementById('viewDocumentModal').style.display = 'block';
+            }
+        }
+
+        function editDocument(index) {
+            if (currentIndexData[index]) {
+                const doc = currentIndexData[index];
+                document.getElementById('documentModalTitle').textContent = 'Edit Document';
+                document.getElementById('documentData').value = JSON.stringify(doc, null, 2);
+                document.getElementById('documentDataError').style.display = 'none';
+                document.getElementById('dynamicFormError').style.display = 'none';
+                document.getElementById('documentId').style.display = 'none';
+                document.getElementById('saveDocumentBtn').textContent = 'Update Document';
+                currentDocumentIndex = index;
+
+                // Generate form with current document data
+                if (currentIndexData.length > 0) {
+                    documentSchema = analyzeDocumentSchema(currentIndexData);
+                    generateDynamicForm(documentSchema, doc);
+                    currentFormMode = 'form';
+
+                    // Set form mode as default
+                    document.querySelector('.search-mode-toggle button').classList.add('active');
+                    document.querySelectorAll('.search-mode-toggle button')[1].classList.remove('active');
+                    document.getElementById('dynamicForm').style.display = 'block';
+                    document.getElementById('jsonForm').style.display = 'none';
+                } else {
+                    // Fallback to JSON mode
+                    currentFormMode = 'json';
+                    document.querySelector('.search-mode-toggle button').classList.remove('active');
+                    document.querySelectorAll('.search-mode-toggle button')[1].classList.add('active');
+                    document.getElementById('dynamicForm').style.display = 'none';
+                    document.getElementById('jsonForm').style.display = 'block';
+                }
+
+                document.getElementById('documentModal').style.display = 'block';
+            }
+        }
+
+        function editDocumentFromView() {
+            closeViewDocumentModal();
+            if (currentDocumentIndex >= 0) {
+                editDocument(currentDocumentIndex);
+            }
+        }
+
+        function deleteDocument(index) {
+            if (currentIndexData[index]) {
+                const doc = currentIndexData[index];
+                document.getElementById('deleteDocumentPreview').innerHTML = '<pre>' + JSON.stringify(doc, null, 2) + '</pre>';
+                currentDocumentIndex = index;
+                document.getElementById('deleteConfirmModal').style.display = 'block';
+            }
+        }
+
+        async function saveDocument() {
+            let parsedData;
+            let errorDiv;
+
+            // Clear previous errors
+            document.getElementById('documentDataError').style.display = 'none';
+            document.getElementById('dynamicFormError').style.display = 'none';
+
+            try {
+                if (currentFormMode === 'form') {
+                    // Collect data from form
+                    errorDiv = document.getElementById('dynamicFormError');
+                    parsedData = collectFormData();
+
+                    // Validate required fields
+                    for (const [fieldName, fieldInfo] of Object.entries(documentSchema)) {
+                        if (fieldInfo.required && (!parsedData[fieldName] || parsedData[fieldName] === '')) {
+                            throw new Error(`Field "${fieldName}" is required`);
+                        }
+                    }
+                } else {
+                    // Parse JSON data
+                    errorDiv = document.getElementById('documentDataError');
+                    const documentData = document.getElementById('documentData').value.trim();
+
+                    if (!documentData) {
+                        throw new Error('Please provide document data');
+                    }
+
+                    parsedData = JSON.parse(documentData);
+                }
+
+                // Save to backend
+                const isUpdate = currentDocumentIndex >= 0;
+                const method = isUpdate ? 'PUT' : 'POST';
+                const url = '/api/index/' + encodeURIComponent(currentIndexName) + '/document' +
+                    (isUpdate ? '/' + currentDocumentIndex : '');
+
+                const response = await fetch(url, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(parsedData)
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(errorText);
+                }
+
+                // Success
+                closeDocumentModal();
+                await loadIndexData(currentIndexName, currentPage);
+
+                // Show success message
+                const successMsg = isUpdate ? 'Document updated successfully!' : 'Document created successfully!';
+                showNotification(successMsg, 'success');
+
+            } catch (error) {
+                let errorMessage = error.message;
+
+                // Handle JSON parsing errors specifically
+                if (error instanceof SyntaxError) {
+                    errorMessage = 'Invalid JSON format: ' + error.message;
+                }
+
+                errorDiv.textContent = errorMessage;
+                errorDiv.style.display = 'block';
+            }
+        }
+
+        async function confirmDeleteDocument() {
+            if (currentDocumentIndex < 0) return;
+
+            try {
+                const response = await fetch('/api/index/' + encodeURIComponent(currentIndexName) + '/document/' + currentDocumentIndex, {
                     method: 'DELETE'
                 });
 
-                if (response.ok) {
-                    alert('Index deleted successfully!');
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(errorText);
+                }
+
+                // Success
+                closeDeleteConfirmModal();
+                await loadIndexData(currentIndexName, currentPage);
+
+                showNotification('Document deleted successfully!', 'success');
+
+            } catch (error) {
+                showNotification('Error deleting document: ' + error.message, 'error');
+            }
+        }
+
+        // Modal control functions
+        function closeDocumentModal() {
+            document.getElementById('documentModal').style.display = 'none';
+            currentDocumentIndex = -1;
+        }
+
+        function closeViewDocumentModal() {
+            document.getElementById('viewDocumentModal').style.display = 'none';
+            currentDocumentIndex = -1;
+        }
+
+        function closeDeleteConfirmModal() {
+            document.getElementById('deleteConfirmModal').style.display = 'none';
+            currentDocumentIndex = -1;
+        }
+
+        // Notification system
+        function showNotification(message, type = 'info') {
+            // Remove existing notifications
+            const existingNotifications = document.querySelectorAll('.notification');
+            existingNotifications.forEach(n => n.remove());
+
+            // Create new notification
+            const notification = document.createElement('div');
+            notification.className = 'notification notification-' + type;
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 12px 20px;
+                border-radius: 6px;
+                color: white;
+                font-weight: 500;
+                z-index: 1001;
+                max-width: 300px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                animation: slideInRight 0.3s ease;
+            `;
+
+            // Set background color based on type
+            switch (type) {
+                case 'success':
+                    notification.style.backgroundColor = '#10b981';
+                    break;
+                case 'error':
+                    notification.style.backgroundColor = '#ef4444';
+                    break;
+                default:
+                    notification.style.backgroundColor = '#3b82f6';
+            }
+
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            // Auto remove after 3 seconds
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.style.animation = 'slideOutRight 0.3s ease';
+                    setTimeout(() => notification.remove(), 300);
+                }
+            }, 3000);
+        }
+
+        // Add CSS animation for notifications
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideInRight {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes slideOutRight {
+                from { transform: translateX(0); opacity: 1; }
+                to { transform: translateX(100%); opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+
+        // Close modals when clicking outside
+        window.onclick = function (event) {
+            const modals = ['documentModal', 'viewDocumentModal', 'deleteConfirmModal'];
+            modals.forEach(modalId => {
+                const modal = document.getElementById(modalId);
+                if (event.target === modal) {
+                    modal.style.display = 'none';
+                }
+            });
+        };
+
+        // Metrics
+        async function loadMetrics() {
+            try {
+                const res = await fetch('/api/metrics');
+                const m = await res.json();
+                document.getElementById('totalIndexes').textContent = m.total_indexes || 0;
+                document.getElementById('totalDocuments').textContent = m.total_documents || 0;
+                document.getElementById('totalQueries').textContent = m.total_queries || 0;
+            } catch { }
+        }
+
+        // Indexes Table
+        async function loadIndexes() {
+            const tbody = document.getElementById('indexesTableBody');
+            tbody.innerHTML = `<tr><td colspan="5" class="loading">Loading indexes...</td></tr>`;
+            try {
+                const res = await fetch('/api/indexes');
+                const indexes = await res.json();
+                currentIndexes = Object.keys(indexes);
+                if (currentIndexes.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#888;">No indexes found.</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = '';
+                for (const [name, stats] of Object.entries(indexes)) {
+                    tbody.innerHTML += `
+                <tr>
+                    <td>${name}</td>
+                    <td>${stats.document_count}</td>
+                    <td>${stats.term_count}</td>
+                    <td>${stats.total_queries}</td>
+                    <td>
+                        <button class="btn btn-danger" onclick="deleteIndex('${name}')">Delete</button>
+                    </td>
+                </tr>
+            `;
+                }
+                loadIndexOptions();
+                loadMetrics();
+            } catch {
+                tbody.innerHTML = `<tr><td colspan="5" style="color:red;text-align:center;">Error loading indexes</td></tr>`;
+            }
+        }
+
+        // Index dropdowns
+        function loadIndexOptions() {
+            const searchIndex = document.getElementById('searchIndex');
+            const uploadIndex = document.getElementById('uploadIndex');
+            const advancedIndex = document.getElementById('advancedIndex');
+
+            if (searchIndex) {
+                searchIndex.innerHTML = '<option value="">All indexes</option>';
+                currentIndexes.forEach(idx => {
+                    searchIndex.innerHTML += `<option value="${idx}">${idx}</option>`;
+                });
+            }
+
+            if (uploadIndex) {
+                uploadIndex.innerHTML = '<option value="">Select an index</option>';
+                currentIndexes.forEach(idx => {
+                    uploadIndex.innerHTML += `<option value="${idx}">${idx}</option>`;
+                });
+            }
+
+            if (advancedIndex) {
+                advancedIndex.innerHTML = '<option value="">Select an index</option>';
+                currentIndexes.forEach(idx => {
+                    advancedIndex.innerHTML += `<option value="${idx}">${idx}</option>`;
+                });
+            }
+        }
+
+        // Create index
+        async function createIndex() {
+            const name = document.getElementById('indexName').value.trim();
+            if (!name) return alert('Enter index name');
+            try {
+                const res = await fetch(`/api/index/create?name=${encodeURIComponent(name)}`, { method: 'POST' });
+                if (res.ok) {
+                    alert('Index created!');
+                    document.getElementById('indexName').value = '';
                     loadIndexes();
                 } else {
-                    const error = await response.text();
-                    alert('Error deleting index: ' + error);
+                    alert('Error: ' + await res.text());
                 }
-            } catch (error) {
-                console.error('Error deleting index:', error);
-                alert('Error deleting index');
-            }
+            } catch { alert('Error creating index'); }
         }
 
-        // Handle file drag and drop
-        function handleDragOver(e) {
-            e.preventDefault();
-            e.currentTarget.classList.add('dragover');
+        // Delete index
+        async function deleteIndex(name) {
+            if (!confirm(`Delete index "${name}"?`)) return;
+            try {
+                const res = await fetch(`/api/index/${encodeURIComponent(name)}`, { method: 'DELETE' });
+                if (res.ok) loadIndexes();
+                else alert('Error: ' + await res.text());
+            } catch { alert('Error deleting index'); }
         }
 
-        function handleDragLeave(e) {
-            e.currentTarget.classList.remove('dragover');
+        // File upload
+        const uploadArea = document.getElementById('uploadArea');
+        if (uploadArea) {
+            uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+            uploadArea.addEventListener('dragleave', e => { uploadArea.classList.remove('dragover'); });
+            uploadArea.addEventListener('drop', e => {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+
+                const files = e.dataTransfer.files;
+                if (files.length > 0) handleFileUpload({ target: { files } });
+            });
         }
-
-        function handleDrop(e) {
-            e.preventDefault();
-            e.currentTarget.classList.remove('dragover');
-
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                handleFileUpload({ target: { files } });
-            }
-        }
-
-        // Handle file upload
         async function handleFileUpload(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -669,21 +2579,18 @@
                     if (file.name.endsWith('.json')) {
                         data = JSON.parse(e.target.result);
                     } else if (file.name.endsWith('.csv')) {
-                        // Simple CSV parsing (for demo purposes)
-                        const lines = e.target.result.split('\n');
+                        const lines = e.target.result.split('\n').filter(Boolean);
                         const headers = lines[0].split(',');
                         data = lines.slice(1).map(line => {
                             const values = line.split(',');
                             const obj = {};
-                            headers.forEach((header, i) => {
-                                obj[header.trim()] = values[i]?.trim();
-                            });
+                            headers.forEach((header, i) => obj[header.trim()] = values[i]?.trim());
                             return obj;
                         }).filter(obj => Object.keys(obj).length > 0);
                     }
 
                     document.getElementById('jsonData').value = JSON.stringify(data, null, 2);
-                    alert(`File loaded successfully! ${Array.isArray(data) ? data.length : 1} records found.`);
+                    alert(`File loaded: ${Array.isArray(data) ? data.length : 1} records.`);
                 } catch (error) {
                     alert('Error parsing file: ' + error.message);
                 }
@@ -691,115 +2598,120 @@
             reader.readAsText(file);
         }
 
-        // Upload data to index
+        // Upload data
         async function uploadData() {
             const indexName = document.getElementById('uploadIndex').value;
             const jsonData = document.getElementById('jsonData').value.trim();
 
-            if (!indexName) {
-                alert('Please select an index');
-                return;
-            }
-
-            if (!jsonData) {
-                alert('Please provide data to upload');
-                return;
-            }
+            if (!indexName) return alert('Select an index');
+            if (!jsonData) return alert('Provide data to upload');
 
             try {
                 const data = JSON.parse(jsonData);
-                // For now, just show success (actual implementation would send to backend)
-                alert(`Data uploaded successfully to index "${indexName}"!\n${Array.isArray(data) ? data.length : 1} records processed.`);
+                // TODO: Send to backend API
+                alert(`Data uploaded to "${indexName}"!\n${Array.isArray(data) ? data.length : 1} records.`);
                 document.getElementById('jsonData').value = '';
                 loadMetrics();
             } catch (error) {
-                alert('Invalid JSON data: ' + error.message);
+                alert('Invalid JSON: ' + error.message);
             }
         }
 
-        // Handle search keypress
-        function handleSearchKeypress(event) {
-            if (event.key === 'Enter') {
-                performSearch();
-            }
-        }
-
-        // Perform search
+        // Search
         async function performSearch() {
             const query = document.getElementById('searchQuery').value.trim();
             const indexName = document.getElementById('searchIndex').value;
             const size = document.getElementById('searchSize').value;
-            const type = document.getElementById('searchType').value;
+            const searchType = document.getElementById('searchType').value;
 
-            if (!query) {
-                alert('Please enter a search query');
+            if (!query) return alert('Enter a search query');
+
+            showSearchResults();
+
+            try {
+                // Build search URL with search type parameter
+                const params = new URLSearchParams({
+                    q: query,
+                    size: size,
+                    search_type: searchType
+                });
+
+                // Add fuzzy threshold for fuzzy searches
+                if (searchType === 'fuzzy') {
+                    params.append('fuzzy_threshold', '2');
+                }
+
+                const searchUrl = indexName ?
+                    `/api/search/${encodeURIComponent(indexName)}?${params.toString()}` :
+                    `/api/search/demo?${params.toString()}`;
+
+                const res = await fetch(searchUrl);
+                const results = await res.json();
+
+                displaySearchResults(results);
+            } catch (error) {
+                document.getElementById('searchResults').textContent = 'Search failed.';
+            }
+        }
+
+        function showSearchResults() {
+            const resultsTable = document.getElementById('resultsTable');
+            const resultsDiv = document.getElementById('searchResults');
+
+            resultsTable.style.display = 'none';
+            resultsDiv.style.display = '';
+            resultsDiv.textContent = 'Searching...';
+        }
+
+        function displaySearchResults(results) {
+            const resultsTable = document.getElementById('resultsTable');
+            const resultsHead = document.getElementById('resultsTableHead');
+            const resultsBody = document.getElementById('resultsTableBody');
+            const resultsDiv = document.getElementById('searchResults');
+
+            if (!results.items || results.items.length === 0) {
+                resultsDiv.textContent = 'No results found.';
                 return;
             }
 
-            const resultsContainer = document.getElementById('searchResults');
-            resultsContainer.innerHTML = '<div class="loading"><div class="spinner"></div>Searching...</div>';
+            // Table headers
+            const first = results.items[0];
+            const keys = Object.keys(first).filter(k => k !== 'score');
+            resultsHead.innerHTML = keys.map(k => `<th>${k[0].toUpperCase() + k.slice(1)}</th>`).join('') +
+                (first.score !== undefined ? '<th>Score</th>' : '');
 
-            try {
-                const searchUrl = indexName ?
-                    `/api/search/${encodeURIComponent(indexName)}?q=${encodeURIComponent(query)}&size=${size}` :
-                    `/api/search/demo?q=${encodeURIComponent(query)}&size=${size}`;
+            // Table rows
+            resultsBody.innerHTML = results.items.map(item => {
+                return `<tr>` +
+                    keys.map(k => `<td>${highlightText(item[k], document.getElementById('searchQuery').value)}</td>`).join('') +
+                    (item.score !== undefined ? `<td>${item.score.toFixed(3)}</td>` : '') +
+                    `</tr>`;
+            }).join('');
 
-                const response = await fetch(searchUrl);
-                const results = await response.json();
-
-                if (results.total === 0) {
-                    resultsContainer.innerHTML = '<div style="text-align: center; color: #718096; padding: 40px;">No results found for your query.</div>';
-                    return;
-                }
-
-                let html = `<div style="margin-bottom: 20px; color: #4a5568;">Found ${results.total} results</div>`;
-
-                results.items.forEach((item, index) => {
-                    // Support both {record, score} and {record} only (for backward compatibility)
-                    const record = item || {};
-                    const score = typeof item.score === 'number' ? item.score : null;
-                    html += `
-                        <div class="result-item">
-                            <div class="result-title">
-                                ${record.title || `Document ${index + 1}`}
-                            </div>
-                            <div class="result-content">
-                                ${highlightText(record.content || JSON.stringify(record), query)}
-                            </div>
-                            <div class="result-meta">
-                                <div>
-                                    ${record.author ? `Author: ${record.author}` : ''}
-                                    ${record.category ? ` • Category: ${record.category}` : ''}
-                                </div>
-                                ${score !== null ? `<div class="score">Score: ${score.toFixed(3)}</div>` : ''}
-                            </div>
-                        </div>
-                    `;
-                });
-
-                resultsContainer.innerHTML = html;
-            } catch (error) {
-                console.error('Search error:', error);
-                resultsContainer.innerHTML = '<div style="color: red; text-align: center; padding: 20px;">Search failed. Please try again.</div>';
-            }
+            resultsTable.style.display = '';
+            resultsDiv.style.display = 'none';
         }
 
-        // Highlight search terms in text
         function highlightText(text, query) {
             if (!text || !query) return text;
 
-            const terms = query.toLowerCase().split(' ').filter(term => term.length > 2);
-            let highlightedText = text;
+            const terms = query.toLowerCase().split(' ').filter(t => t.length > 2);
+            let t = String(text);
 
             terms.forEach(term => {
-                const regex = new RegExp(`(${term})`, 'gi');
-                highlightedText = highlightedText.replace(regex, '<span class="highlight">$1</span>');
+                t = t.replace(new RegExp(`(${term})`, 'gi'), '<span class="highlight">$1</span>');
             });
 
-            return highlightedText;
+            return t;
         }
 
-        // Auto-refresh metrics every 30 seconds
+        // Initial load
+        document.addEventListener('DOMContentLoaded', function () {
+            loadMetrics();
+            loadIndexes();
+            loadIndexOptions();
+            showPage('search', document.querySelector('.sidebar-nav button.active'));
+        });
         setInterval(loadMetrics, 30000);
     </script>
 </body>

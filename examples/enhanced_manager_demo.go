@@ -23,7 +23,7 @@ func main() {
 		CacheExpiry:          2 * time.Hour,
 	}
 
-	manager := lookup.NewHighPerformanceManager(config)
+	manager := lookup.NewManager(config)
 	defer manager.Close()
 
 	// Create sample indexes

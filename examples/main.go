@@ -23,12 +23,12 @@ func main() {
 		CacheExpiry:          2 * time.Hour,
 	}
 
-	manager := lookup.NewHighPerformanceManager(config)
+	manager := lookup.NewManager(config)
 	defer manager.Close()
 
 	// Create sample indexes
 	indexes := []string{"documents", "products", "users"}
-	
+
 	for _, indexName := range indexes {
 		if err := manager.CreateIndex(indexName); err != nil {
 			log.Printf("Error creating index %s: %v", indexName, err)
@@ -114,9 +114,9 @@ func main() {
 
 	// Index the data
 	ctx := context.Background()
-	
+
 	log.Println("📚 Indexing sample data...")
-	
+
 	if err := manager.Build(ctx, "documents", documentData); err != nil {
 		log.Printf("Error indexing documents: %v", err)
 	} else {
@@ -226,7 +226,7 @@ func main() {
 	log.Println("  - GET  /api/search/<index>?q=<query> - Search index")
 	log.Println("  - GET  /api/metrics - System metrics")
 	log.Println("\n🎯 Open http://localhost:8080/search-ui.html for the web interface")
-	
+
 	// This will block and serve HTTP requests
 	manager.StartAdvancedHTTPServer(":8080")
 }

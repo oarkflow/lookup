@@ -890,11 +890,30 @@ func (index *Index) SearchScoreDocs(ctx context.Context, req Request) (Page, err
 	}
 	if req.Query != "" {
 		var q Query
-		if strings.Contains(req.Query, " ") {
-			q = NewPhraseQuery(req.Query, !req.Exact, 1)
-		} else {
-			q = NewTermQuery(req.Query, !req.Exact, 1)
+
+		// Determine search type based on request parameters
+		useFuzzy := req.Fuzzy || req.SearchType == "fuzzy"
+		threshold := req.FuzzyThreshold
+		if threshold <= 0 {
+			threshold = 2 // default threshold
 		}
+
+		switch req.SearchType {
+		case "phrase":
+			q = NewPhraseQuery(req.Query, useFuzzy, threshold)
+		case "exact":
+			q = NewTermQuery(req.Query, false, 0) // exact search, no fuzzy
+		case "fuzzy":
+			fallthrough
+		default:
+			// Default to fuzzy search if not specified
+			if strings.Contains(req.Query, " ") {
+				q = NewPhraseQuery(req.Query, true, threshold)
+			} else {
+				q = NewTermQuery(req.Query, true, threshold)
+			}
+		}
+
 		switch qry := query.(type) {
 		case *FilterQuery:
 			qry.Term = q
