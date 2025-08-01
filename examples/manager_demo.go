@@ -26,9 +26,9 @@ func main() {
 	manager := lookup.NewHighPerformanceManager(config)
 	defer manager.Close()
 
-	// Create sample indexes
-	indexes := []string{"documents", "products", "users"}
-	
+	// Create multiple indexes for different use cases
+	indexes := []string{"documents", "products", "users", "logs"}
+
 	for _, indexName := range indexes {
 		if err := manager.CreateIndex(indexName); err != nil {
 			log.Printf("Error creating index %s: %v", indexName, err)
@@ -47,6 +47,7 @@ func main() {
 			"author":      "Dr. Sarah Johnson",
 			"publishDate": "2024-01-15",
 			"rating":      4.8,
+			"tags":        []string{"AI", "ML", "Deep Learning"},
 		},
 		{
 			"id":          2,
@@ -56,6 +57,7 @@ func main() {
 			"author":      "Mike Chen",
 			"publishDate": "2024-02-20",
 			"rating":      4.6,
+			"tags":        []string{"Go", "Concurrency", "Performance"},
 		},
 		{
 			"id":          3,
@@ -65,6 +67,7 @@ func main() {
 			"author":      "Alex Rodriguez",
 			"publishDate": "2024-03-10",
 			"rating":      4.7,
+			"tags":        []string{"Database", "SQL", "Optimization"},
 		},
 	}
 
@@ -77,6 +80,11 @@ func main() {
 			"price":       299.99,
 			"brand":       "TechCorp",
 			"inStock":     true,
+			"specifications": map[string]interface{}{
+				"capacity": "1TB",
+				"speed":    "7000MB/s",
+				"warranty": "5 years",
+			},
 		},
 		{
 			"id":          102,
@@ -86,6 +94,11 @@ func main() {
 			"price":       1299.99,
 			"brand":       "GraphicsMax",
 			"inStock":     true,
+			"specifications": map[string]interface{}{
+				"memory": "24GB GDDR6X",
+				"cores":  10240,
+				"power":  "350W",
+			},
 		},
 	}
 
@@ -98,6 +111,7 @@ func main() {
 			"role":       "admin",
 			"department": "Engineering",
 			"joinDate":   "2023-06-15",
+			"skills":     []string{"Go", "Python", "Kubernetes", "Docker"},
 			"active":     true,
 		},
 		{
@@ -108,15 +122,16 @@ func main() {
 			"role":       "developer",
 			"department": "Product",
 			"joinDate":   "2023-08-20",
+			"skills":     []string{"JavaScript", "React", "Node.js", "MongoDB"},
 			"active":     true,
 		},
 	}
 
 	// Index the data
 	ctx := context.Background()
-	
+
 	log.Println("📚 Indexing sample data...")
-	
+
 	if err := manager.Build(ctx, "documents", documentData); err != nil {
 		log.Printf("Error indexing documents: %v", err)
 	} else {
@@ -155,9 +170,7 @@ func main() {
 			if i >= 2 { // Show only first 2 results
 				break
 			}
-			if title, ok := item["title"].(string); ok {
-				log.Printf("  - %s", title)
-			}
+			log.Printf("  - %s (Score: %.3f)", item.Record["title"], item.Score)
 		}
 	}
 
@@ -171,37 +184,38 @@ func main() {
 		log.Printf("Product search error: %v", err)
 	} else {
 		log.Printf("🛍️  Product search for 'performance SSD graphics' found %d results", result.Total)
-		for _, item := range result.Items {
-			if name, ok := item["name"].(string); ok {
-				if price, ok := item["price"].(float64); ok {
-					log.Printf("  - %s ($%.2f)", name, price)
-				} else {
-					log.Printf("  - %s", name)
-				}
-			}
+		for i, item := range result.Items {
+			log.Printf("  - %s ($%.2f) - Score: %.3f",
+				item.Record["name"], item.Record["price"], item.Score)
 		}
 	}
 
 	// Search users
 	userQuery := lookup.Request{
-		Query: "developer engineering",
+		Query: "developer engineering Go",
 		Size:  5,
 	}
 
 	if result, err := manager.Search(ctx, "users", userQuery); err != nil {
 		log.Printf("User search error: %v", err)
 	} else {
-		log.Printf("👥 User search for 'developer engineering' found %d results", result.Total)
+		log.Printf("👥 User search for 'developer engineering Go' found %d results", result.Total)
 		for _, item := range result.Items {
-			if fullName, ok := item["fullName"].(string); ok {
-				if department, ok := item["department"].(string); ok {
-					log.Printf("  - %s (%s)", fullName, department)
-				} else {
-					log.Printf("  - %s", fullName)
-				}
-			}
+			log.Printf("  - %s (%s) - %s - Score: %.3f",
+				item.Record["fullName"], item.Record["username"],
+				item.Record["department"], item.Score)
 		}
 	}
+
+	// Display system metrics
+	log.Println("\n📊 System Metrics:")
+	metrics := manager.GetSystemMetrics()
+	log.Printf("  Total Indexes: %v", metrics["total_indexes"])
+	log.Printf("  Total Documents: %v", metrics["total_documents"])
+	log.Printf("  Total Terms: %v", metrics["total_terms"])
+	log.Printf("  Total Queries: %v", metrics["total_queries"])
+	log.Printf("  Worker Count: %v", metrics["worker_count"])
+	log.Printf("  Uptime: %v", metrics["uptime"])
 
 	// Show detailed index statistics
 	log.Println("\n📈 Index Statistics:")
@@ -218,15 +232,14 @@ func main() {
 	// Start the advanced HTTP server
 	log.Println("\n🌐 Starting Advanced HTTP Server...")
 	log.Println("Available endpoints:")
-	log.Println("  - GET  / - Static files")
-	log.Println("  - GET  /search-ui.html - Web UI")
+	log.Println("  - GET  / - Web UI")
 	log.Println("  - GET  /api/indexes - List all indexes")
 	log.Println("  - POST /api/index/create?name=<name> - Create index")
 	log.Println("  - DELETE /api/index/<name> - Delete index")
 	log.Println("  - GET  /api/search/<index>?q=<query> - Search index")
 	log.Println("  - GET  /api/metrics - System metrics")
 	log.Println("\n🎯 Open http://localhost:8080/search-ui.html for the web interface")
-	
+
 	// This will block and serve HTTP requests
 	manager.StartAdvancedHTTPServer(":8080")
 }

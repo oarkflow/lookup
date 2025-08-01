@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -388,7 +390,162 @@ func (t *BPTree[K, V]) rebalance(parent, child *node[K, V], idx int) {
 	}
 }
 
-// TODO: Add full index persistence (inverted index, doc lengths, etc.) for durability.
+// IndexPersistence provides functionality to persist and restore index data
+type IndexPersistence struct {
+	basePath string
+}
+
+// NewIndexPersistence creates a new persistence manager
+func NewIndexPersistence(basePath string) *IndexPersistence {
+	return &IndexPersistence{basePath: basePath}
+}
+
+// SaveIndex saves the complete index state to disk
+func (p *IndexPersistence) SaveIndex(index *Index) error {
+	index.RLock()
+	defer index.RUnlock()
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(p.basePath, 0755); err != nil {
+		return fmt.Errorf("failed to create index directory: %v", err)
+	}
+
+	// Save inverted index
+	if err := p.saveInvertedIndex(index.index); err != nil {
+		return fmt.Errorf("failed to save inverted index: %v", err)
+	}
+
+	// Save document lengths
+	if err := p.saveDocLengths(index.docLength); err != nil {
+		return fmt.Errorf("failed to save document lengths: %v", err)
+	}
+
+	// Save metadata
+	metadata := IndexMetadata{
+		ID:           index.ID,
+		TotalDocs:    index.TotalDocs,
+		AvgDocLength: index.AvgDocLength,
+		Timestamp:    time.Now(),
+	}
+	if err := p.saveMetadata(metadata); err != nil {
+		return fmt.Errorf("failed to save metadata: %v", err)
+	}
+
+	return nil
+}
+
+// LoadIndex restores the complete index state from disk
+func (p *IndexPersistence) LoadIndex(index *Index) error {
+	index.Lock()
+	defer index.Unlock()
+
+	// Load inverted index
+	invertedIndex, err := p.loadInvertedIndex()
+	if err != nil {
+		return fmt.Errorf("failed to load inverted index: %v", err)
+	}
+	index.index = invertedIndex
+
+	// Load document lengths
+	docLengths, err := p.loadDocLengths()
+	if err != nil {
+		return fmt.Errorf("failed to load document lengths: %v", err)
+	}
+	index.docLength = docLengths
+
+	// Load metadata
+	metadata, err := p.loadMetadata()
+	if err != nil {
+		return fmt.Errorf("failed to load metadata: %v", err)
+	}
+	index.TotalDocs = metadata.TotalDocs
+	index.AvgDocLength = metadata.AvgDocLength
+
+	return nil
+}
+
+// IndexMetadata contains index metadata for persistence
+type IndexMetadata struct {
+	ID           string    `json:"id"`
+	TotalDocs    int       `json:"total_docs"`
+	AvgDocLength float64   `json:"avg_doc_length"`
+	Timestamp    time.Time `json:"timestamp"`
+}
+
+// saveInvertedIndex saves the inverted index to a file
+func (p *IndexPersistence) saveInvertedIndex(index map[string][]Posting) error {
+	filePath := filepath.Join(p.basePath, "inverted_index.json")
+	data, err := json.Marshal(index)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filePath, data, 0644)
+}
+
+// loadInvertedIndex loads the inverted index from a file
+func (p *IndexPersistence) loadInvertedIndex() (map[string][]Posting, error) {
+	filePath := filepath.Join(p.basePath, "inverted_index.json")
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string][]Posting), nil
+		}
+		return nil, err
+	}
+
+	var index map[string][]Posting
+	err = json.Unmarshal(data, &index)
+	return index, err
+}
+
+// saveDocLengths saves document lengths to a file
+func (p *IndexPersistence) saveDocLengths(docLengths map[int64]int) error {
+	filePath := filepath.Join(p.basePath, "doc_lengths.json")
+	data, err := json.Marshal(docLengths)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filePath, data, 0644)
+}
+
+// loadDocLengths loads document lengths from a file
+func (p *IndexPersistence) loadDocLengths() (map[int64]int, error) {
+	filePath := filepath.Join(p.basePath, "doc_lengths.json")
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[int64]int), nil
+		}
+		return nil, err
+	}
+
+	var docLengths map[int64]int
+	err = json.Unmarshal(data, &docLengths)
+	return docLengths, err
+}
+
+// saveMetadata saves index metadata to a file
+func (p *IndexPersistence) saveMetadata(metadata IndexMetadata) error {
+	filePath := filepath.Join(p.basePath, "metadata.json")
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filePath, data, 0644)
+}
+
+// loadMetadata loads index metadata from a file
+func (p *IndexPersistence) loadMetadata() (IndexMetadata, error) {
+	var metadata IndexMetadata
+	filePath := filepath.Join(p.basePath, "metadata.json")
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return metadata, err
+	}
+
+	err = json.Unmarshal(data, &metadata)
+	return metadata, err
+}
 
 func (t *BPTree[K, V]) ForEach(fn func(key K, value V) bool) {
 	t.mu.RLock()

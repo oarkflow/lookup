@@ -1,99 +1,29 @@
 package lookup
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"os"
-	"reflect"
-	"slices"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/cespare/xxhash/v2"
-
 	"github.com/oarkflow/filters"
 	"github.com/oarkflow/json"
-
-	"github.com/oarkflow/lookup/utils"
 )
 
-type Manager struct {
-	indexes map[string]*Index
-	mutex   sync.Mutex
-}
-
-func NewManager() *Manager {
-	return &Manager{
-		indexes: make(map[string]*Index),
-	}
-}
-
-func (m *Manager) AddIndex(name string, index *Index) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	m.indexes[name] = index
-}
-
-func (m *Manager) GetIndex(name string) (*Index, bool) {
-	m.mutex.Lock() // Replace with RLock if mutex becomes RWMutex; otherwise, minimal change
-	defer m.mutex.Unlock()
-	index, ok := m.indexes[name]
-	return index, ok
-}
-
-func (m *Manager) DeleteIndex(name string) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	delete(m.indexes, name)
-}
-
-func (m *Manager) ListIndexes() []string {
-	m.mutex.Lock() // Replace with RLock if mutex becomes RWMutex
-	defer m.mutex.Unlock()
-	names := make([]string, 0, len(m.indexes))
-	for name := range m.indexes {
-		names = append(names, name)
-	}
-	return names
-}
-
-func (m *Manager) Build(ctx context.Context, name string, req any) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	index, ok := m.indexes[name]
-	if !ok {
-		return fmt.Errorf("index %s not found", name)
-	}
-	return index.Build(ctx, req)
-}
-
-func (m *Manager) Search(ctx context.Context, name string, req Request) (*Result, error) {
-	m.mutex.Lock()
-	index, ok := m.indexes[name]
-	m.mutex.Unlock()
-	if !ok {
-		fmt.Printf("index %s not found\n", name)
-		return nil, fmt.Errorf("index %s not found", name)
-	}
-	return index.Search(ctx, req)
-}
-
-type NewIndexRequest struct {
-	ID          string   `json:"id"`
-	DocIDField  string   `json:"doc_id_field,omitempty"`
-	Except      []string `json:"except,omitempty"`
-	Fields      []string `json:"fields,omitempty"`
-	Workers     int      `json:"workers,omitempty"`
-	Cache       int      `json:"cache,omitempty"`
-	Order       int      `json:"order,omitempty"`
-	Distributed bool     `json:"distributed,omitempty"`
-	Peers       []string `json:"peers,omitempty"`
+// HighPerformanceManager provides advanced index management
+type HighPerformanceManager struct {
+	indexes      map[string]*EnhancedIndex
+	indexStats   map[string]*IndexStats
+	mutex        sync.RWMutex
+	requestQueue chan *ManagerRequest
+	workers      []*ManagerWorker
+	shutdown     chan struct{}
+	wg           sync.WaitGroup
+	config       *ManagerConfig
 }
 
 type Filter struct {
@@ -162,303 +92,562 @@ func (r Request) Checksum() (uint64, error) {
 	return xxhash.Sum64(payload), nil
 }
 
-var builtInFields = []string{"q", "m", "l", "f", "t", "o", "s", "exact", "p", "condition", "sort_field", "sort_order"}
+// ManagerConfig holds configuration for the manager
+type ManagerConfig struct {
+	MaxWorkers           int           `json:"max_workers"`
+	RequestQueueSize     int           `json:"request_queue_size"`
+	AutoOptimizeInterval time.Duration `json:"auto_optimize_interval"`
+	HealthCheckInterval  time.Duration `json:"health_check_interval"`
+	PersistenceEnabled   bool          `json:"persistence_enabled"`
+	PersistencePath      string        `json:"persistence_path"`
+	CacheSize            int           `json:"cache_size"`
+	CacheExpiry          time.Duration `json:"cache_expiry"`
+}
 
-func prepareQuery(r *http.Request) (Request, error) {
-	var query Request
-	extraMap := make(map[string]any)
-	bodyBytes, err := io.ReadAll(r.Body)
+// IndexStats tracks performance metrics for each index
+type IndexStats struct {
+	TotalQueries   int64         `json:"total_queries"`
+	AverageLatency time.Duration `json:"average_latency"`
+	LastAccessed   time.Time     `json:"last_accessed"`
+	DocumentCount  int           `json:"document_count"`
+	TermCount      int           `json:"term_count"`
+	ErrorCount     int64         `json:"error_count"`
+	LastOptimized  time.Time     `json:"last_optimized"`
+}
+
+// ManagerRequest represents a request to be processed
+type ManagerRequest struct {
+	Type      string      `json:"type"`
+	IndexName string      `json:"index_name"`
+	Data      interface{} `json:"data"`
+	Response  chan *ManagerResponse
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// ManagerResponse represents the response from processing a request
+type ManagerResponse struct {
+	Success bool          `json:"success"`
+	Data    interface{}   `json:"data"`
+	Error   string        `json:"error,omitempty"`
+	Latency time.Duration `json:"latency"`
+}
+
+// ManagerWorker processes index requests
+type ManagerWorker struct {
+	id      int
+	manager *HighPerformanceManager
+	stop    chan struct{}
+}
+
+// NewHighPerformanceManager creates a new high-performance manager
+func NewHighPerformanceManager(config *ManagerConfig) *HighPerformanceManager {
+	if config == nil {
+		config = &ManagerConfig{
+			MaxWorkers:           8,
+			RequestQueueSize:     10000,
+			AutoOptimizeInterval: 1 * time.Hour,
+			HealthCheckInterval:  5 * time.Minute,
+			PersistenceEnabled:   true,
+			PersistencePath:      "./data/indexes",
+			CacheSize:            10000,
+			CacheExpiry:          1 * time.Hour,
+		}
+	}
+
+	manager := &HighPerformanceManager{
+		indexes:      make(map[string]*EnhancedIndex),
+		indexStats:   make(map[string]*IndexStats),
+		requestQueue: make(chan *ManagerRequest, config.RequestQueueSize),
+		shutdown:     make(chan struct{}),
+		config:       config,
+	}
+
+	// Start workers
+	manager.startWorkers()
+
+	return manager
+}
+
+// startWorkers initializes and starts worker goroutines
+func (m *HighPerformanceManager) startWorkers() {
+	m.workers = make([]*ManagerWorker, m.config.MaxWorkers)
+	for i := 0; i < m.config.MaxWorkers; i++ {
+		worker := &ManagerWorker{
+			id:      i,
+			manager: m,
+			stop:    make(chan struct{}),
+		}
+		m.workers[i] = worker
+		m.wg.Add(1)
+		go worker.run()
+	}
+}
+
+// CreateIndex creates a new enhanced index
+func (m *HighPerformanceManager) CreateIndex(name string, options ...Options) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if _, exists := m.indexes[name]; exists {
+		return fmt.Errorf("index %s already exists", name)
+	}
+
+	enhancedOptions := append(options,
+		WithCacheCapacity(m.config.CacheSize),
+		WithCacheExpiry(m.config.CacheExpiry),
+		WithNumOfWorkers(4),
+	)
+
+	index := NewEnhancedIndex(name, enhancedOptions...)
+	index.EnableStemming(true)
+	index.EnableMetrics(true)
+
+	m.indexes[name] = index
+	m.indexStats[name] = &IndexStats{
+		LastAccessed: time.Now(),
+	}
+
+	log.Printf("Created enhanced index: %s", name)
+	return nil
+}
+
+// GetIndex retrieves an index by name
+func (m *HighPerformanceManager) GetIndex(name string) (*EnhancedIndex, bool) {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+
+	index, ok := m.indexes[name]
+	if ok && m.indexStats[name] != nil {
+		m.indexStats[name].LastAccessed = time.Now()
+	}
+	return index, ok
+}
+
+// DeleteIndex removes an index
+func (m *HighPerformanceManager) DeleteIndex(name string) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	index, exists := m.indexes[name]
+	if !exists {
+		return fmt.Errorf("index %s not found", name)
+	}
+
+	if err := index.Close(); err != nil {
+		log.Printf("Warning: Error closing index %s: %v", name, err)
+	}
+
+	delete(m.indexes, name)
+	delete(m.indexStats, name)
+
+	log.Printf("Deleted index: %s", name)
+	return nil
+}
+
+// ListIndexes returns a list of all index names with stats
+func (m *HighPerformanceManager) ListIndexes() map[string]*IndexStats {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+
+	result := make(map[string]*IndexStats)
+	for name, stats := range m.indexStats {
+		if index, exists := m.indexes[name]; exists {
+			stats.DocumentCount = index.TotalDocs
+			stats.TermCount = len(index.Index.index)
+		}
+		result[name] = stats
+	}
+	return result
+}
+
+// ProcessRequest handles index requests asynchronously
+func (m *HighPerformanceManager) ProcessRequest(req *ManagerRequest) *ManagerResponse {
+	req.Response = make(chan *ManagerResponse, 1)
+	req.Timestamp = time.Now()
+
+	select {
+	case m.requestQueue <- req:
+		return <-req.Response
+	case <-time.After(30 * time.Second):
+		return &ManagerResponse{
+			Success: false,
+			Error:   "request timeout",
+			Latency: 30 * time.Second,
+		}
+	}
+}
+
+// Build indexes documents from various sources
+func (m *HighPerformanceManager) Build(ctx context.Context, indexName string, source interface{}) error {
+	req := &ManagerRequest{
+		Type:      "build",
+		IndexName: indexName,
+		Data:      source,
+	}
+
+	response := m.ProcessRequest(req)
+	if !response.Success {
+		return fmt.Errorf("build failed: %s", response.Error)
+	}
+	return nil
+}
+
+// Search performs high-performance search
+func (m *HighPerformanceManager) Search(ctx context.Context, indexName string, query Request) (*Result, error) {
+	req := &ManagerRequest{
+		Type:      "search",
+		IndexName: indexName,
+		Data:      query,
+	}
+
+	response := m.ProcessRequest(req)
+	if !response.Success {
+		return nil, fmt.Errorf("search failed: %s", response.Error)
+	}
+
+	result, ok := response.Data.(*Result)
+	if !ok {
+		return nil, fmt.Errorf("invalid search response type")
+	}
+
+	return result, nil
+}
+
+// Close gracefully shuts down the manager
+func (m *HighPerformanceManager) Close() error {
+	log.Println("Shutting down HighPerformanceManager...")
+
+	// Stop workers
+	for _, worker := range m.workers {
+		close(worker.stop)
+	}
+
+	// Wait for all goroutines to finish
+	m.wg.Wait()
+
+	// Close all indexes
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	for name, index := range m.indexes {
+		if err := index.Close(); err != nil {
+			log.Printf("Error closing index %s: %v", name, err)
+		}
+	}
+
+	log.Println("HighPerformanceManager shutdown complete")
+	return nil
+}
+
+// Worker implementation
+func (w *ManagerWorker) run() {
+	defer w.manager.wg.Done()
+
+	for {
+		select {
+		case req := <-w.manager.requestQueue:
+			w.processRequest(req)
+		case <-w.stop:
+			return
+		case <-w.manager.shutdown:
+			return
+		}
+	}
+}
+
+func (w *ManagerWorker) processRequest(req *ManagerRequest) {
+	startTime := time.Now()
+	response := &ManagerResponse{
+		Success: true,
+		Latency: 0,
+	}
+
+	defer func() {
+		response.Latency = time.Since(startTime)
+		req.Response <- response
+
+		// Update stats
+		if stats, exists := w.manager.indexStats[req.IndexName]; exists {
+			stats.TotalQueries++
+			if stats.TotalQueries == 1 {
+				stats.AverageLatency = response.Latency
+			} else {
+				stats.AverageLatency = (stats.AverageLatency + response.Latency) / 2
+			}
+			if !response.Success {
+				stats.ErrorCount++
+			}
+		}
+	}()
+
+	index, exists := w.manager.GetIndex(req.IndexName)
+	if !exists {
+		response.Success = false
+		response.Error = fmt.Sprintf("index %s not found", req.IndexName)
+		return
+	}
+
+	switch req.Type {
+	case "build":
+		if err := w.handleBuild(index, req.Data); err != nil {
+			response.Success = false
+			response.Error = err.Error()
+		}
+	case "search":
+		result, err := w.handleSearch(index, req.Data)
+		if err != nil {
+			response.Success = false
+			response.Error = err.Error()
+		} else {
+			response.Data = result
+		}
+	default:
+		response.Success = false
+		response.Error = fmt.Sprintf("unknown request type: %s", req.Type)
+	}
+}
+
+func (w *ManagerWorker) handleBuild(index *EnhancedIndex, data interface{}) error {
+	ctx := context.Background()
+
+	switch source := data.(type) {
+	case []GenericRecord:
+		return index.Build(ctx, source)
+	default:
+		return fmt.Errorf("unsupported build source type: %T", data)
+	}
+}
+
+func (w *ManagerWorker) handleSearch(index *EnhancedIndex, data interface{}) (*Result, error) {
+	query, ok := data.(Request)
+	if !ok {
+		return nil, fmt.Errorf("invalid search query type: %T", data)
+	}
+
+	ctx := context.Background()
+	return index.Search(ctx, query)
+}
+
+// StartAdvancedHTTPServer starts an enhanced HTTP server
+func (m *HighPerformanceManager) StartAdvancedHTTPServer(addr string) {
+	// Serve static files for the UI
+	http.Handle("/", http.FileServer(http.Dir("./static")))
+
+	// API endpoints
+	http.HandleFunc("/api/indexes", m.handleIndexes)
+	http.HandleFunc("/api/index/create", m.handleCreateIndex)
+	http.HandleFunc("/api/index/", m.handleIndexOperations)
+	http.HandleFunc("/api/search/", m.handleSearch)
+	http.HandleFunc("/api/metrics", m.handleMetrics)
+
+	log.Printf("Enhanced HTTP server listening on http://%s", addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
+}
+
+func (m *HighPerformanceManager) handleIndexes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	indexes := m.ListIndexes()
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	if err := enc.Encode(indexes); err != nil {
+		http.Error(w, "Failed to encode indexes", http.StatusInternalServerError)
+		return
+	}
+}
+
+func (m *HighPerformanceManager) handleCreateIndex(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// For now, create a simple index
+	indexName := r.URL.Query().Get("name")
+	if indexName == "" {
+		http.Error(w, "Index name required", http.StatusBadRequest)
+		return
+	}
+
+	if err := m.CreateIndex(indexName); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	w.Header().Set("Content-Type", "application/json")
+	resp := struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	}{
+		Status:  "success",
+		Message: fmt.Sprintf("Index %s created", indexName),
+	}
+	enc := json.NewEncoder(w)
+	if err := enc.Encode(resp); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
+func (m *HighPerformanceManager) handleIndexOperations(w http.ResponseWriter, r *http.Request) {
+	// Extract index name from path
+	path := r.URL.Path[len("/api/index/"):]
+	if path == "" {
+		http.Error(w, "Index name required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		if err := m.DeleteIndex(path); err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		resp := struct {
+			Status  string `json:"status"`
+			Message string `json:"message"`
+		}{
+			Status:  "success",
+			Message: fmt.Sprintf("Index %s deleted", path),
+		}
+		enc := json.NewEncoder(w)
+		if err := enc.Encode(resp); err != nil {
+			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+			return
+		}
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (m *HighPerformanceManager) handleSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract index name from path
+	path := r.URL.Path[len("/api/search/"):]
+	if path == "" {
+		http.Error(w, "Index name required", http.StatusBadRequest)
+		return
+	}
+
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		http.Error(w, "Query required", http.StatusBadRequest)
+		return
+	}
+
+	req := Request{
+		Query: query,
+		Size:  10,
+	}
+
+	result, err := m.Search(r.Context(), path, req)
 	if err != nil {
-		return query, err
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	if len(bodyBytes) > 0 {
-		err = json.Unmarshal(bodyBytes, &query)
-		if err != nil {
-			return query, fmt.Errorf("error unmarshalling query: %v", err)
-		}
-		err = json.Unmarshal(bodyBytes, &extraMap)
-		if err != nil {
-			return query, fmt.Errorf("error unmarshalling extra: %v", err)
-		}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	resp := struct {
+		Total int             `json:"total"`
+		Items []GenericRecord `json:"items"`
+	}{
+		Total: result.Total,
+		Items: result.Items,
 	}
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	if q != "" {
-		query.Query = q
+	enc := json.NewEncoder(w)
+	if err := enc.Encode(resp); err != nil {
+		http.Error(w, "Failed to encode search result", http.StatusInternalServerError)
+		return
 	}
-	var extra []Filter
-	for k, v := range extraMap {
-		if slices.Contains(builtInFields, k) {
-			continue
-		}
-		vt := reflect.TypeOf(v).Kind()
-		operator := filters.Equal
-		if vt == reflect.Slice {
-			operator = filters.In
-		}
-		extra = append(extra, Filter{
-			Field:    k,
-			Operator: operator,
-			Value:    v,
-		})
+}
+
+func (m *HighPerformanceManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
-	if len(extra) == 0 {
-		rawQuery := r.URL.RawQuery
-		extraFilters, err := filters.ParseQuery(rawQuery, builtInFields...)
-		if err != nil {
-			return query, err
-		}
-		for _, v := range extraFilters {
-			extra = append(extra, Filter{
-				Field:    v.Field,
-				Operator: v.Operator,
-				Value:    v.Value,
-				Reverse:  v.Reverse,
-				Lookup:   v.Lookup,
-			})
-		}
+
+	stats := m.ListIndexes()
+	w.Header().Set("Content-Type", "application/json")
+
+	totalDocs := 0
+	totalQueries := int64(0)
+	for _, stat := range stats {
+		totalDocs += stat.DocumentCount
+		totalQueries += stat.TotalQueries
 	}
-	if extra != nil && query.Filters == nil {
-		query.Filters = extra
+
+	resp := struct {
+		TotalIndexes   int   `json:"total_indexes"`
+		TotalDocuments int   `json:"total_documents"`
+		TotalQueries   int64 `json:"total_queries"`
+	}{
+		TotalIndexes:   len(stats),
+		TotalDocuments: totalDocs,
+		TotalQueries:   totalQueries,
 	}
-	condition := strings.TrimSpace(utils.ToLower(query.Condition))
-	if condition != "" {
-		rule, err := filters.ParseSQL(condition)
-		if err != nil {
-			return query, fmt.Errorf("error parsing condition: %v", err)
-		}
-		if rule != nil {
-			query.Rule = rule
-		}
+	enc := json.NewEncoder(w)
+	if err := enc.Encode(resp); err != nil {
+		http.Error(w, "Failed to encode metrics", http.StatusInternalServerError)
+		return
 	}
-	return query, nil
+}
+
+// Legacy Manager for backward compatibility
+type Manager struct {
+	hpManager *HighPerformanceManager
+}
+
+func NewManager() *Manager {
+	return &Manager{
+		hpManager: NewHighPerformanceManager(nil),
+	}
+}
+
+func (m *Manager) AddIndex(name string, index *Index) {
+	enhancedIndex := &EnhancedIndex{Index: index}
+	m.hpManager.indexes[name] = enhancedIndex
+}
+
+func (m *Manager) GetIndex(name string) (*Index, bool) {
+	enhanced, ok := m.hpManager.GetIndex(name)
+	if !ok {
+		return nil, false
+	}
+	return enhanced.Index, true
+}
+
+func (m *Manager) DeleteIndex(name string) {
+	m.hpManager.DeleteIndex(name)
+}
+
+func (m *Manager) ListIndexes() []string {
+	stats := m.hpManager.ListIndexes()
+	names := make([]string, 0, len(stats))
+	for name := range stats {
+		names = append(names, name)
+	}
+	return names
+}
+
+func (m *Manager) Build(ctx context.Context, name string, req any) error {
+	return m.hpManager.Build(ctx, name, req)
+}
+
+func (m *Manager) Search(ctx context.Context, name string, req Request) (*Result, error) {
+	return m.hpManager.Search(ctx, name, req)
 }
 
 func (m *Manager) StartHTTP(addr string) {
-	http.Handle("/", http.FileServer(http.Dir("./static")))
-
-	http.HandleFunc("/index/add", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Unsupported method", http.StatusMethodNotAllowed)
-			return
-		}
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error reading body: %v", err), http.StatusBadRequest)
-			return
-		}
-		var req NewIndexRequest
-		if err := json.Unmarshal(body, &req); err != nil {
-			http.Error(w, fmt.Sprintf("Error unmarshalling request: %v", err), http.StatusBadRequest)
-			return
-		}
-		if strings.TrimSpace(req.ID) == "" {
-			http.Error(w, "index ID required in request body", http.StatusBadRequest)
-			return
-		}
-		opts := []Options{}
-		if req.DocIDField != "" {
-			opts = append(opts, WithDocIDField(req.DocIDField))
-		}
-		if len(req.Except) > 0 {
-			opts = append(opts, WithIndexFieldsExcept(req.Except...))
-		}
-		if len(req.Fields) > 0 {
-			opts = append(opts, WithFieldsToIndex(req.Fields...))
-		}
-		if req.Workers > 0 {
-			opts = append(opts, WithNumOfWorkers(req.Workers))
-		}
-		if req.Cache > 0 {
-			opts = append(opts, WithCacheCapacity(req.Cache))
-		}
-		if req.Order > 0 {
-			opts = append(opts, WithOrder(req.Order))
-		}
-		if req.Distributed {
-			opts = append(opts, WithDistributed())
-		}
-		if len(req.Peers) > 0 {
-			opts = append(opts, WithPeers(req.Peers...))
-		}
-		index := NewIndex(req.ID, opts...)
-		m.AddIndex(req.ID, index)
-		_, _ = w.Write([]byte(fmt.Sprintf("index %s created successfully", req.ID)))
-	})
-	http.HandleFunc("/indexes", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Unsupported method", http.StatusMethodNotAllowed)
-			return
-		}
-		indexes := m.ListIndexes()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(indexes)
-	})
-	http.HandleFunc("/{index}/build", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Unsupported method", http.StatusMethodNotAllowed)
-			return
-		}
-		indexName := r.PathValue("index")
-		if strings.TrimSpace(indexName) == "" {
-			http.Error(w, "index name required in path", http.StatusBadRequest)
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error reading body: %v", err), http.StatusBadRequest)
-			return
-		}
-		var req IndexRequest
-		if err := json.Unmarshal(body, &req); err != nil {
-			http.Error(w, fmt.Sprintf("Error unmarshalling request: %v", err), http.StatusBadRequest)
-			return
-		}
-		// Support DB import via IndexRequest
-		if req.Database != nil {
-			go func(indexName string, req IndexRequest) {
-				err = m.Build(context.Background(), indexName, req)
-				if err != nil {
-					log.Printf("Build error: %v", err)
-				}
-			}(indexName, req)
-			_, _ = w.Write([]byte(fmt.Sprintf("Database import started for index %s", indexName)))
-			return
-		}
-		if req.Path != "" {
-			go func(indexName string, req IndexRequest) {
-				err = m.Build(context.Background(), indexName, req)
-				if err != nil {
-					log.Printf("Build error: %v", err)
-				}
-			}(indexName, req)
-			_, _ = w.Write([]byte(fmt.Sprintf("Indexing started for %s with index name %s", req.Path, indexName)))
-			return
-		}
-		err = m.Build(ctx, indexName, req)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Build error: %v", err), http.StatusInternalServerError)
-			return
-		}
-		_, _ = w.Write([]byte("index built successfully"))
-	})
-	http.HandleFunc("/{index}/search", func(w http.ResponseWriter, r *http.Request) {
-		indexName := r.PathValue("index")
-		if strings.TrimSpace(indexName) == "" {
-			http.Error(w, "index name required in path", http.StatusBadRequest)
-			return
-		}
-		req, err := prepareQuery(r)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error preparing query: %v", err), http.StatusBadRequest)
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		results, err := m.Search(ctx, indexName, req)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Search error: %v", err), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(results)
-	})
-
-	// Enhancement: Update document endpoint
-	http.HandleFunc("/{index}/update", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Unsupported method", http.StatusMethodNotAllowed)
-			return
-		}
-		indexName := r.PathValue("index")
-		if strings.TrimSpace(indexName) == "" {
-			http.Error(w, "index name required in path", http.StatusBadRequest)
-			return
-		}
-		var payload struct {
-			DocID int64         `json:"doc_id"`
-			Doc   GenericRecord `json:"doc"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			http.Error(w, "invalid payload", http.StatusBadRequest)
-			return
-		}
-		idx, ok := m.GetIndex(indexName)
-		if !ok {
-			http.Error(w, "index not found", http.StatusNotFound)
-			return
-		}
-		if err := idx.UpdateDocument(payload.DocID, payload.Doc); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		_, _ = w.Write([]byte("document updated"))
-	})
-
-	// Enhancement: Delete document endpoint
-	http.HandleFunc("/{index}/delete", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Unsupported method", http.StatusMethodNotAllowed)
-			return
-		}
-		indexName := r.PathValue("index")
-		if strings.TrimSpace(indexName) == "" {
-			http.Error(w, "index name required in path", http.StatusBadRequest)
-			return
-		}
-		var payload struct {
-			DocID int64 `json:"doc_id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			http.Error(w, "invalid payload", http.StatusBadRequest)
-			return
-		}
-		idx, ok := m.GetIndex(indexName)
-		if !ok {
-			http.Error(w, "index not found", http.StatusNotFound)
-			return
-		}
-		if err := idx.DeleteDocument(payload.DocID); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		_, _ = w.Write([]byte("document deleted"))
-	})
-
-	// Enhancement: Index status endpoint
-	http.HandleFunc("/{index}/status", func(w http.ResponseWriter, r *http.Request) {
-		indexName := r.PathValue("index")
-		if strings.TrimSpace(indexName) == "" {
-			http.Error(w, "index name required in path", http.StatusBadRequest)
-			return
-		}
-		idx, ok := m.GetIndex(indexName)
-		if !ok {
-			http.Error(w, "index not found", http.StatusNotFound)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(idx.Status())
-	})
-
-	// Enhancement: Shutdown endpoint
-	http.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
-		for _, idx := range m.indexes {
-			_ = idx.Close()
-		}
-		w.Write([]byte("All indexes closed."))
-		go func() {
-			time.Sleep(500 * time.Millisecond)
-			os.Exit(0)
-		}()
-	})
-	addr = strings.TrimSpace(addr)
-	urlParts := strings.Split(addr, ":")
-	if urlParts[0] == "" {
-		addr = "0.0.0.0:" + urlParts[1]
-	}
-	log.Printf("HTTP server listening on http://%s", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	m.hpManager.StartAdvancedHTTPServer(addr)
 }

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -181,12 +182,13 @@ func RowCount(filePath string) (int, error) {
 	return count, nil
 }
 
-// Tokenize tokenizes a mutable byte slice in place.
-// It converts ASCII letters to lowercase and returns a slice of tokens
-// without performing extra allocations for temporary strings.
+// Tokenize tokenizes a string and returns a slice of tokens
+// It converts ASCII letters to lowercase without modifying the original string
 func Tokenize(text string) []string {
-	buf := UnsafeBytes(text)
-	// We will return slice headers referencing parts of buf.
+	// Make a safe copy to avoid modifying the original string
+	buf := make([]byte, len(text))
+	copy(buf, UnsafeBytes(text))
+
 	var tokens []string
 	i := 0
 	for i < len(buf) {
@@ -196,8 +198,6 @@ func Tokenize(text string) []string {
 			if isAlphaNum(buf[i]) {
 				break
 			}
-			// Optionally, you can set the delimiter to a space (or leave it)
-			// buf[i] = ' '
 			i++
 		}
 		// Mark the beginning of a token.
@@ -216,9 +216,7 @@ func Tokenize(text string) []string {
 		}
 		// If we collected a token, append it.
 		if start < i {
-			// Converting a sub-slice of buf to a string here creates a string header
-			// that references the underlying buf data without copying it.
-			// (Be cautious: if buf is later modified, so will be the tokens.)
+			// Create a new string from the processed bytes
 			tokens = append(tokens, string(buf[start:i]))
 		}
 	}
@@ -243,6 +241,56 @@ func TokenizeUnicode(text string) []string {
 		tokens = append(tokens, sb.String())
 	}
 	return tokens
+}
+
+// TokenizeWithStemming tokenizes text and applies simple English stemming
+func TokenizeWithStemming(text string) []string {
+	tokens := Tokenize(text)
+	for i, token := range tokens {
+		tokens[i] = SimpleStem(token)
+	}
+	return tokens
+}
+
+// SimpleStem applies basic English stemming rules
+func SimpleStem(word string) string {
+	if len(word) <= 3 {
+		return word
+	}
+
+	// Remove common suffixes
+	suffixes := []struct {
+		suffix, replacement string
+		minLen              int
+	}{
+		{"ying", "", 5},   // running -> runn -> run (will be handled by next rule)
+		{"ing", "", 4},    // running -> run
+		{"ly", "", 5},     // quickly -> quick
+		{"ed", "", 4},     // worked -> work
+		{"ies", "y", 4},   // flies -> fly
+		{"ied", "y", 4},   // tried -> try
+		{"ried", "ry", 5}, // carried -> carry
+		{"s", "", 3},      // cats -> cat (but not "as" -> "a")
+	}
+
+	for _, rule := range suffixes {
+		if len(word) >= rule.minLen && strings.HasSuffix(word, rule.suffix) {
+			stemmed := word[:len(word)-len(rule.suffix)] + rule.replacement
+			// Ensure we don't create words that are too short
+			if len(stemmed) >= 2 {
+				// Special case for -ing: if it creates a double consonant, remove one
+				if rule.suffix == "ing" && len(stemmed) > 2 {
+					last := stemmed[len(stemmed)-1]
+					secondLast := stemmed[len(stemmed)-2]
+					if last == secondLast && last != 'l' && last != 's' && last != 'z' {
+						return stemmed[:len(stemmed)-1]
+					}
+				}
+				return stemmed
+			}
+		}
+	}
+	return word
 }
 
 // isAlphaNum returns true if b is an ASCII letter or digit.
@@ -284,9 +332,9 @@ func BoundedLevenshtein(a, b string, threshold int) int {
 			if a[i-1] != b[j-1] {
 				cost = 1
 			}
+			// Fix: use separate min calls instead of three arguments
 			current[j] = min(
-				current[j-1]+1,
-				prev[j]+1,
+				min(current[j-1]+1, prev[j]+1),
 				prev[j-1]+cost,
 			)
 			if current[j] < minVal {
@@ -481,4 +529,70 @@ func ToString(val any) string {
 	default:
 		return fmt.Sprintf("%v", val)
 	}
+}
+
+// FastIntersect performs intersection on sorted slices using two-pointer technique
+func FastIntersect(a, b []int64) []int64 {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
+	}
+
+	result := make([]int64, 0, min(len(a), len(b)))
+	i, j := 0, 0
+
+	for i < len(a) && j < len(b) {
+		if a[i] == b[j] {
+			result = append(result, a[i])
+			i++
+			j++
+		} else if a[i] < b[j] {
+			i++
+		} else {
+			j++
+		}
+	}
+	return result
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// max returns the maximum of two integers
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// RemoveDuplicatesInt64 removes duplicates from a sorted slice
+func RemoveDuplicatesInt64(slice []int64) []int64 {
+	if len(slice) <= 1 {
+		return slice
+	}
+
+	result := make([]int64, 1, len(slice))
+	result[0] = slice[0]
+
+	for i := 1; i < len(slice); i++ {
+		if slice[i] != slice[i-1] {
+			result = append(result, slice[i])
+		}
+	}
+	return result
+}
+
+// SortAndDedupe sorts and removes duplicates from a slice
+func SortAndDedupe(slice []int64) []int64 {
+	if len(slice) <= 1 {
+		return slice
+	}
+
+	sort.Slice(slice, func(i, j int) bool { return slice[i] < slice[j] })
+	return RemoveDuplicatesInt64(slice)
 }
