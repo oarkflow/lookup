@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Log Viewer</title>
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-dark: #3730a3;
+            --bg: #f4f6fa;
+            --card-bg: #fff;
+            --border: #e5e7eb;
+        }
+
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
+            background: var(--bg);
+            color: #232946;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1 {
+            font-size: 2rem;
+            color: var(--primary);
+            margin-bottom: 20px;
+        }
+
+        .filters {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .filters input,
+        .filters select {
+            padding: 10px;
+            border: 1.5px solid var(--border);
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+
+        .log-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--card-bg);
+        }
+
+        th,
+        td {
+            padding: 10px;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+        }
+
+        th {
+            background: #f3f4f6;
+            color: #232946;
+            font-weight: 600;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .highlight {
+            background: #fef9c3;
+            border-radius: 3px;
+            padding: 1px 4px;
+        }
+
+        .pagination-controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .pagination-controls button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            background: var(--primary);
+            color: #fff;
+            font-size: 1rem;
+            cursor: pointer;
+            margin: 0 5px;
+        }
+
+        .pagination-controls button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Log Viewer</h1>
+        <div class="filters">
+            <input type="text" id="search" placeholder="Search logs...">
+            <select id="log-level">
+                <option value="">All Levels</option>
+                <option value="INFO">INFO</option>
+                <option value="WARN">WARN</option>
+                <option value="ERROR">ERROR</option>
+            </select>
+        </div>
+        <table class="log-table">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Level</th>
+                    <th>Message</th>
+                </tr>
+            </thead>
+            <tbody id="log-entries">
+                <!-- Logs will be dynamically added here -->
+            </tbody>
+        </table>
+
+        <div class="pagination-controls">
+            <button id="prev-button" disabled>Previous</button>
+            <button id="next-button">Next</button>
+        </div>
+    </div>
+
+    <script>
+        const logEntries = document.getElementById('log-entries');
+        const searchInput = document.getElementById('search');
+        const logLevelSelect = document.getElementById('log-level');
+        const prevButton = document.getElementById('prev-button');
+        const nextButton = document.getElementById('next-button');
+
+        const socket = new WebSocket('ws://localhost:8080/logs');
+
+        const headersSet = new Set();
+        const maxRows = 1000; // Fixed-size in-memory buffer
+        const batchInterval = 100; // Batch updates every 100ms
+        const incomingBatch = [];
+        let isProcessingBatch = false;
+        let currentPage = 1;
+        const rowsPerPage = 20;
+
+        function processBatch() {
+            if (isProcessingBatch) return;
+            isProcessingBatch = true;
+
+            setTimeout(() => {
+                const fragment = document.createDocumentFragment();
+                incomingBatch.forEach(log => {
+                    // Update headers set
+                    Object.keys(log).forEach(header => headersSet.add(header));
+
+                    // Update table headers
+                    const thead = document.querySelector('.log-table thead tr');
+                    thead.innerHTML = '';
+                    headersSet.forEach(header => {
+                        const th = document.createElement('th');
+                        th.textContent = header;
+                        thead.appendChild(th);
+                    });
+
+                    // Create table row aligned with headers
+                    const row = document.createElement('tr');
+                    headersSet.forEach(header => {
+                        const td = document.createElement('td');
+                        td.textContent = log[header] || '';
+                        row.appendChild(td);
+                    });
+
+                    fragment.appendChild(row);
+                });
+
+                logEntries.prepend(fragment);
+
+                // Offload rows if exceeding maxRows
+                while (logEntries.children.length > maxRows) {
+                    logEntries.removeChild(logEntries.lastChild);
+                }
+
+                incomingBatch.length = 0; // Clear batch
+                isProcessingBatch = false;
+                updatePagination();
+                paginateLogs(currentPage);
+            }, batchInterval);
+        }
+
+        socket.onmessage = function (event) {
+            const log = JSON.parse(event.data);
+            incomingBatch.push(log);
+            processBatch();
+        };
+
+        function updatePaginationControls() {
+            const totalRows = logEntries.children.length;
+            const totalPages = Math.ceil(totalRows / rowsPerPage);
+            prevButton.disabled = currentPage === 1;
+            nextButton.disabled = currentPage === totalPages;
+        }
+
+        function updatePagination() {
+            const totalRows = logEntries.children.length;
+            const totalPages = Math.ceil(totalRows / rowsPerPage);
+            console.log(`Page ${currentPage} of ${totalPages}`);
+            updatePaginationControls();
+        }
+
+        function paginateLogs(page) {
+            const totalRows = logEntries.children.length;
+            const start = (page - 1) * rowsPerPage;
+            const end = start + rowsPerPage;
+
+            Array.from(logEntries.children).forEach((row, index) => {
+                row.style.display = index >= start && index < end ? '' : 'none';
+            });
+        }
+
+        // Example: Call paginateLogs when navigating pages
+        paginateLogs(currentPage);
+
+        function fetchOlderLogs(offset) {
+            // Example: Fetch older logs from server
+            fetch(`/api/logs?offset=${offset}&limit=${rowsPerPage}`)
+                .then(response => response.json())
+                .then(data => {
+                    const fragment = document.createDocumentFragment();
+                    data.forEach(log => {
+                        const row = document.createElement('tr');
+                        headersSet.forEach(header => {
+                            const td = document.createElement('td');
+                            td.textContent = log[header] || '';
+                            row.appendChild(td);
+                        });
+                        fragment.appendChild(row);
+                    });
+                    logEntries.appendChild(fragment);
+                });
+        }
+
+        // Example: Trigger fetchOlderLogs when scrolling back
+        // fetchOlderLogs(offset);
+
+        searchInput.addEventListener('input', filterLogs);
+        logLevelSelect.addEventListener('change', filterLogs);
+
+        function filterLogs() {
+            const searchTerm = searchInput.value.toLowerCase();
+            const selectedLevel = logLevelSelect.value;
+
+            const filteredRows = Array.from(logEntries.children).filter(row => {
+                const timestamp = row.children[0].textContent.toLowerCase();
+                const level = row.children[1].textContent;
+                const message = row.children[2].textContent.toLowerCase();
+
+                const matchesSearch = timestamp.includes(searchTerm) || message.includes(searchTerm);
+                const matchesLevel = !selectedLevel || level === selectedLevel;
+
+                return matchesSearch && matchesLevel;
+            });
+
+            logEntries.innerHTML = '';
+            filteredRows.forEach(row => logEntries.appendChild(row));
+
+            paginateLogs(currentPage);
+            updatePaginationControls();
+        }
+
+        prevButton.onclick = () => {
+            if (currentPage > 1) {
+                currentPage--;
+                paginateLogs(currentPage);
+                updatePaginationControls();
+            }
+        };
+
+        nextButton.onclick = () => {
+            const totalRows = logEntries.children.length;
+            const totalPages = Math.ceil(totalRows / rowsPerPage);
+            if (currentPage < totalPages) {
+                currentPage++;
+                paginateLogs(currentPage);
+                updatePaginationControls();
+            }
+        };
+    </script>
+</body>
+
+</html>

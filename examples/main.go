@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/oarkflow/lookup"
 )
 
@@ -227,6 +229,89 @@ func main() {
 	log.Println("  - GET  /api/metrics - System metrics")
 	log.Println("\n🎯 Open http://localhost:8080/search-ui.html for the web interface")
 
+	http.HandleFunc("/logs", handleWebSocketLogs)
+
 	// This will block and serve HTTP requests
 	manager.StartAdvancedHTTPServer(":8080")
+}
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
+func generateTimestamp() string {
+	return time.Now().Format("2006-01-02 15:04:05")
+}
+
+func generateInfoLog() map[string]string {
+	return map[string]string{
+		"timestamp": generateTimestamp(),
+		"level":     "INFO",
+		"message":   "Application started successfully",
+	}
+}
+
+func generateDebugLog() map[string]string {
+	return map[string]string{
+		"timestamp": generateTimestamp(),
+		"level":     "DEBUG",
+		"message":   "Configuration loaded",
+		"details":   "MaxWorkers=8, CacheSize=50000",
+	}
+}
+
+func generateWarnLog() map[string]string {
+	return map[string]string{
+		"timestamp": generateTimestamp(),
+		"level":     "WARN",
+		"message":   "Cache expiry set to default",
+	}
+}
+
+func generateErrorLog() map[string]string {
+	return map[string]string{
+		"timestamp": generateTimestamp(),
+		"level":     "ERROR",
+		"message":   "Failed to connect to database",
+	}
+}
+
+func generateFatalLog() map[string]string {
+	return map[string]string{
+		"timestamp": generateTimestamp(),
+		"level":     "FATAL",
+		"message":   "Application terminated unexpectedly",
+	}
+}
+
+func handleWebSocketLogs(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Failed to upgrade WebSocket connection: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	log.Println("WebSocket connection established")
+
+	logGenerators := []func() map[string]string{
+		generateInfoLog,
+		generateDebugLog,
+		generateWarnLog,
+		generateErrorLog,
+		generateFatalLog,
+	}
+
+	for {
+		for _, generateLog := range logGenerators {
+			logMessage := generateLog()
+			if err := conn.WriteJSON(logMessage); err != nil {
+				log.Printf("Error writing to WebSocket: %v", err)
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}
 }
