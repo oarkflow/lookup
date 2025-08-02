@@ -1,0 +1,1316 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Go Concurrency Deep Viz</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+
+        #left-panel {
+            width: 60%;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #3c3c3c;
+        }
+
+        #controls {
+            padding: 15px;
+            background: #252526;
+            border-bottom: 1px solid #3c3c3c;
+        }
+
+        #chart {
+            flex: 1;
+            background: #1e1e1e;
+        }
+
+        #right-panel {
+            width: 40%;
+            display: flex;
+            flex-direction: column;
+            background: #252526;
+        }
+
+        .panel-header {
+            padding: 15px;
+            background: #2d2d30;
+            border-bottom: 1px solid #3c3c3c;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        #info-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        button {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            margin: 0 5px 10px 0;
+            cursor: pointer;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+
+        button:hover {
+            background: #1177bb;
+        }
+
+        button:active {
+            background: #0a4d7a;
+        }
+
+        .snippet-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .code-snippet {
+            background: #2d2d30;
+            border: 1px solid #3c3c3c;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+
+        .code-snippet strong {
+            color: #4ec9b0;
+            display: block;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        pre {
+            background: #1e1e1e;
+            padding: 10px;
+            border-radius: 3px;
+            overflow-x: auto;
+            font-size: 11px;
+            line-height: 1.4;
+        }
+
+        code {
+            color: #d4d4d4;
+        }
+
+        .event-log {
+            margin-bottom: 20px;
+        }
+
+        .event-item {
+            background: #2d2d30;
+            border-left: 3px solid #007acc;
+            padding: 10px;
+            margin-bottom: 8px;
+            border-radius: 0 3px 3px 0;
+            font-size: 11px;
+            line-height: 1.4;
+        }
+
+        .event-item.go-start {
+            border-left-color: #4caf50;
+        }
+
+        .event-item.go-end {
+            border-left-color: #f44336;
+        }
+
+        .event-item.chan-send {
+            border-left-color: #2196f3;
+        }
+
+        .event-item.chan-recv {
+            border-left-color: #03a9f4;
+        }
+
+        .event-item.mutex-lock {
+            border-left-color: #ff9800;
+        }
+
+        .event-item.mutex-unlock {
+            border-left-color: #ffc107;
+        }
+
+        .event-item.region {
+            border-left-color: #9c27b0;
+        }
+
+        .event-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .event-type {
+            font-weight: bold;
+            color: #4ec9b0;
+        }
+
+        .event-time {
+            color: #808080;
+            font-size: 10px;
+        }
+
+        .event-goroutine {
+            color: #dcdcaa;
+            font-weight: bold;
+        }
+
+        .event-details {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #3c3c3c;
+        }
+
+        .detail-row {
+            display: flex;
+            margin-bottom: 3px;
+        }
+
+        .detail-label {
+            min-width: 80px;
+            color: #569cd6;
+            font-weight: bold;
+        }
+
+        .detail-value {
+            color: #ce9178;
+            word-break: break-all;
+        }
+
+        .status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: #2d2d30;
+            padding: 8px 12px;
+            border-radius: 3px;
+            font-size: 11px;
+            border: 1px solid #3c3c3c;
+        }
+
+        .connected {
+            color: #4caf50;
+        }
+
+        .disconnected {
+            color: #f44336;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #1e1e1e;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #3c3c3c;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4c4c4c;
+        }
+
+        .goroutine-item {
+            background: #2d2d30;
+            border: 1px solid #3c3c3c;
+            padding: 10px;
+            margin-bottom: 8px;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+
+        /* Modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+        }
+
+        .modal-content {
+            background-color: #1e1e1e;
+            margin: 5% auto;
+            padding: 20px;
+            border: 1px solid #3c3c3c;
+            border-radius: 5px;
+            width: 80%;
+            max-width: 800px;
+            max-height: 80%;
+            overflow-y: auto;
+            color: #d4d4d4;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #3c3c3c;
+            padding-bottom: 10px;
+        }
+
+        .modal-title {
+            color: #4ec9b0;
+            font-size: 16px;
+            font-weight: bold;
+        }
+
+        .close {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close:hover,
+        .close:focus {
+            color: #fff;
+        }
+
+        .activity-item {
+            background: #2d2d30;
+            border: 1px solid #3c3c3c;
+            padding: 12px;
+            margin-bottom: 8px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+
+        .activity-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .activity-type {
+            background: #007acc;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
+        }
+
+        .activity-timestamp {
+            color: #888;
+            font-size: 10px;
+        }
+
+        .activity-details {
+            color: #ce9178;
+            font-size: 11px;
+            word-break: break-all;
+        }
+
+        .activity-count-clickable {
+            color: #4ec9b0;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+
+        .activity-count-clickable:hover {
+            color: #6ed3c0;
+        }
+
+        .span-event {
+            background: #2d5a27;
+            color: #90ee90;
+        }
+
+        .activity-type.span-event {
+            background: linear-gradient(45deg, #2d5a27, #4a7c59);
+        }
+
+        .goroutine-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .goroutine-name {
+            font-weight: bold;
+            color: #dcdcaa;
+        }
+
+        .goroutine-status {
+            padding: 2px 6px;
+            border-radius: 2px;
+            font-size: 10px;
+            font-weight: bold;
+        }
+
+        .goroutine-status.running {
+            background: #4caf50;
+            color: white;
+        }
+
+        .goroutine-status.paused {
+            background: #ff9800;
+            color: white;
+        }
+
+        .goroutine-status.terminated {
+            background: #f44336;
+            color: white;
+        }
+
+        .goroutine-controls {
+            display: flex;
+            gap: 5px;
+            margin-top: 8px;
+        }
+
+        .goroutine-controls button {
+            padding: 4px 8px;
+            font-size: 10px;
+            margin: 0;
+        }
+
+        .goroutine-info {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #3c3c3c;
+        }
+
+        .info-row {
+            display: flex;
+            margin-bottom: 3px;
+        }
+
+        .info-label {
+            min-width: 70px;
+            color: #569cd6;
+            font-weight: bold;
+        }
+
+        .info-value {
+            color: #ce9178;
+            word-break: break-all;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div id="left-panel">
+            <div id="controls">
+                <h3 style="margin-bottom: 15px; color: #4ec9b0;">Go Concurrency Visualizer</h3>
+
+                <div class="snippet-buttons">
+                    <button id="start">Original Demo</button>
+                    <button id="run-buffered-channel">Buffered Channel</button>
+                    <button id="run-mutex">Mutex Lock</button>
+                    <button id="run-waitgroup">WaitGroup</button>
+                    <button id="run-long-running">Long-Running Server</button>
+                    <button id="run-apm-demo" style="background: #28a745; color: white;">APM Tracing Demo</button>
+                    <button id="clear">Clear</button>
+                    <button id="refresh-goroutines">Refresh Goroutines</button>
+                </div>
+
+                <div style="margin-top: 20px;">
+                    <div class="code-snippet">
+                        <strong>Buffered Channel</strong>
+                        <pre><code>ch := make(chan int, 100)
+go func() {
+    for i := 0; i &lt; 1000; i++ {
+        ch &lt;- i
+    }
+}()
+go func() {
+    for v := range ch {
+        // process v
+    }
+}()</code></pre>
+                    </div>
+                    <div class="code-snippet">
+                        <strong>Mutex Lock</strong>
+                        <pre><code>var mu sync.Mutex
+var counter int
+mu.Lock()
+counter++  // critical section
+mu.Unlock()</code></pre>
+                    </div>
+                    <div class="code-snippet">
+                        <strong>WaitGroup</strong>
+                        <pre><code>var wg sync.WaitGroup
+wg.Add(2)
+go func() {
+    defer wg.Done()
+    // do something
+}()
+go func() {
+    defer wg.Done()
+    // do something
+}()
+wg.Wait()</code></pre>
+                    </div>
+                    <div class="code-snippet">
+                        <strong>Long-Running Server</strong>
+                        <pre><code>// HTTP Server
+go func() {
+    server := &http.Server{Addr: ":9999"}
+    server.ListenAndServe()
+}()
+
+// Background Worker
+go func() {
+    for {
+        // process tasks
+        time.Sleep(5 * time.Second)
+    }
+}()
+
+// DB Connection Pool
+go func() {
+    for {
+        // handle connections
+        time.Sleep(100 * time.Millisecond)
+    }
+}()</code></pre>
+                    </div>
+                    <div class="code-snippet">
+                        <strong>APM Tracing Demo</strong>
+                        <pre><code>// Microservice operations with APM-style tracing
+// Database queries, cache operations, HTTP requests
+// Message queue publish/consume, distributed tracing
+
+// User Service
+DBQuery(ctx, "SELECT id FROM users WHERE email = ?", email)
+CacheSet(ctx, "user:123", userData, 1*time.Hour)
+PublishMessage(ctx, "user.created", event)
+
+// Order Service
+HTTPRequest(ctx, "POST", "/api/charge", payment)
+CacheGet(ctx, "inventory:item1")
+
+// Analytics Service
+ConsumeMessage(ctx, "order.created")
+HTTPRequest(ctx, "POST", "/api/metrics", data)</code></pre>
+                    </div>
+                </div>
+            </div>
+            <div id="chart"></div>
+        </div>
+
+        <div id="right-panel">
+            <div class="panel-header">
+                Goroutine Events & Data Flow
+            </div>
+            <div id="info-container">
+                <div id="goroutine-controls" style="margin-bottom: 20px;">
+                    <h4 style="color: #4ec9b0; margin-bottom: 10px;">Active Goroutines</h4>
+                    <div id="goroutine-list">
+                        <!-- Active goroutines will be listed here -->
+                    </div>
+                </div>
+                <div class="event-log" id="event-log">
+                    <!-- Events will be added here dynamically -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="status" id="status">Disconnected</div>
+
+    <!-- Activities Modal -->
+    <div id="activitiesModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title" id="modalTitle">Goroutine Activities</span>
+                <span class="close" onclick="closeActivitiesModal()">&times;</span>
+            </div>
+            <div id="activitiesContainer">
+                <!-- Activities will be populated here -->
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script>
+        let startTime = new Date(); // Track when the application started
+        const nodes = new vis.DataSet();
+        const edges = new vis.DataSet();
+        const network = new vis.Network(
+            document.getElementById('chart'),
+            { nodes, edges },
+            {
+                physics: {
+                    stabilization: false,
+                    barnesHut: { gravitationalConstant: -8000, springLength: 250 }
+                },
+                nodes: {
+                    shape: 'ellipse',
+                    size: 25,
+                    font: { color: '#ffffff', size: 12 },
+                    borderWidth: 2
+                },
+                edges: {
+                    arrows: 'to',
+                    smooth: { type: 'continuous' },
+                    font: { color: '#ffffff', size: 10 },
+                    width: 2
+                },
+                layout: {
+                    improvedLayout: true
+                }
+            }
+        );
+
+        const statusEl = document.getElementById('status');
+        const eventLogEl = document.getElementById('event-log');
+        const goroutineListEl = document.getElementById('goroutine-list');
+        let eventCount = 0;
+        const maxEvents = 100; // Limit events to prevent memory issues
+        let goroutineRefreshInterval;
+
+        // Button event handlers
+        document.getElementById('start').onclick = () => {
+            clearVisualization();
+            fetch('/start');
+            connect();
+        };
+
+        document.getElementById('run-buffered-channel').onclick = () => {
+            clearVisualization();
+            fetch('/run-buffered-channel');
+            connect();
+            setTimeout(refreshGoroutines, 1000); // Single refresh after 1 second
+        };
+
+        document.getElementById('run-mutex').onclick = () => {
+            clearVisualization();
+            fetch('/run-mutex');
+            connect();
+            setTimeout(refreshGoroutines, 1000); // Single refresh after 1 second
+        };
+
+        document.getElementById('run-waitgroup').onclick = () => {
+            clearVisualization();
+            fetch('/run-waitgroup');
+            connect();
+            setTimeout(refreshGoroutines, 1000); // Single refresh after 1 second
+        };
+
+        document.getElementById('run-long-running').onclick = () => {
+            clearVisualization();
+            fetch('/run-long-running');
+            connect();
+            startGoroutineRefresh();
+        };
+
+        document.getElementById('run-apm-demo').onclick = () => {
+            clearVisualization();
+            fetch('/run-apm-demo');
+            connect();
+            setTimeout(refreshGoroutines, 1000); // Single refresh after 1 second
+        };
+
+        document.getElementById('clear').onclick = () => {
+            clearVisualization();
+            // Also clear server-side goroutines
+            fetch('/api/clear').catch(err => console.error('Failed to clear goroutines:', err));
+        };
+
+        document.getElementById('refresh-goroutines').onclick = () => {
+            refreshGoroutines();
+        };
+
+        function clearVisualization() {
+            startTime = new Date(); // Reset start time for new trace
+            nodes.clear();
+            edges.clear();
+            eventLogEl.innerHTML = '';
+            goroutineListEl.innerHTML = '';
+            activeGoroutines.clear(); // Clear tracked goroutines
+            eventCount = 0;
+            if (ws) ws.close();
+            if (goroutineRefreshInterval) {
+                clearInterval(goroutineRefreshInterval);
+            }
+        }
+
+        function startGoroutineRefresh() {
+            if (goroutineRefreshInterval) {
+                clearInterval(goroutineRefreshInterval);
+            }
+            goroutineRefreshInterval = setInterval(refreshGoroutines, 3000);
+            refreshGoroutines(); // Initial refresh
+        }
+
+        async function refreshGoroutines() {
+            try {
+                const response = await fetch('/api/goroutines');
+                const goroutines = await response.json();
+                updateGoroutineList(goroutines);
+            } catch (error) {
+                console.error('Failed to refresh goroutines:', error);
+            }
+        }
+
+        function updateGoroutineList(goroutines) {
+            // Update both server data and client-side tracked data
+            goroutines.forEach(g => {
+                const gId = g.id || g.name;
+                if (activeGoroutines.has(gId)) {
+                    // Update existing tracked goroutine with server data
+                    const tracked = activeGoroutines.get(gId);
+                    Object.assign(tracked, {
+                        status: g.status,
+                        params: g.params,
+                        paramTypes: g.paramTypes,
+                        response: g.response,
+                        respType: g.respType,
+                        isLongRunning: g.isLongRunning,
+                        callCount: g.callCount,
+                        lastHeartbeat: g.lastHeartbeat
+                    });
+                } else {
+                    // Add new goroutine from server
+                    activeGoroutines.set(gId, {
+                        id: gId,
+                        name: g.name,
+                        status: g.status,
+                        startTime: new Date(g.startTime).getTime() / 1000,
+                        params: g.params,
+                        paramTypes: g.paramTypes,
+                        response: g.response,
+                        respType: g.respType,
+                        isLongRunning: g.isLongRunning,
+                        callCount: g.callCount,
+                        lastHeartbeat: g.lastHeartbeat,
+                        activityCount: 0,
+                        activities: [] // Store actual activity details
+                    });
+                }
+            });
+
+            // Clear and rebuild the UI
+            goroutineListEl.innerHTML = '';
+
+            // Convert Map to array and sort by start time
+            const sortedGoroutines = Array.from(activeGoroutines.values())
+                .filter(g => g.status !== 'terminated' || (Date.now() - (g.endTime || 0) * 1000) < 10000) // Keep terminated for 10 seconds
+                .sort((a, b) => a.startTime - b.startTime);
+
+            sortedGoroutines.forEach(g => {
+                const div = document.createElement('div');
+                div.className = 'goroutine-item';
+                div.id = `goroutine-${g.id}`;
+
+                const duration = g.duration ? g.duration.toFixed(2) + 's' :
+                    g.endTime ? ((g.endTime - g.startTime).toFixed(2) + 's') :
+                        'running';
+
+                const callCount = g.isLongRunning && g.callCount ? ` (calls: ${g.callCount})` : '';
+                const activityCount = g.activityCount > 0 ?
+                    ` [<span class="activity-count-clickable" onclick="showActivities('${g.id}')">${g.activityCount} activities</span>]` : '';
+
+                // Display unique ID if different from name
+                const displayName = g.id !== g.name ? `${g.name} (ID: ${g.id})` : g.name;
+
+                div.innerHTML = `
+                    <div class="goroutine-header">
+                        <span class="goroutine-name">${displayName}${callCount}${activityCount}</span>
+                        <span class="goroutine-status ${g.status}">${g.status}</span>
+                    </div>
+                    <div class="goroutine-info">
+                        <div class="info-row">
+                            <span class="info-label">Duration:</span>
+                            <span class="info-value">${duration}</span>
+                        </div>
+                        ${g.params && g.params !== '<nil>' ? `<div class="info-row">
+                            <span class="info-label">Params:</span>
+                            <span class="info-value">${g.params}</span>
+                        </div>` : ''}
+                        ${g.paramTypes ? `<div class="info-row">
+                            <span class="info-label">Types:</span>
+                            <span class="info-value">${g.paramTypes}</span>
+                        </div>` : ''}
+                        ${g.response && g.response !== '<nil>' ? `<div class="info-row">
+                            <span class="info-label">Response:</span>
+                            <span class="info-value">${g.response}</span>
+                        </div>` : ''}
+                        ${g.lastResponse ? `<div class="info-row">
+                            <span class="info-label">Last Activity:</span>
+                            <span class="info-value">${g.lastResponse}</span>
+                        </div>` : ''}
+                        ${g.lastValue ? `<div class="info-row">
+                            <span class="info-label">Last Value:</span>
+                            <span class="info-value">${g.lastValue}</span>
+                        </div>` : ''}
+                        ${g.respType && g.respType !== '<nil>' ? `<div class="info-row">
+                            <span class="info-label">RespType:</span>
+                            <span class="info-value">${g.respType}</span>
+                        </div>` : ''}
+                        ${g.isLongRunning && g.lastHeartbeat ? `<div class="info-row">
+                            <span class="info-label">Heartbeat:</span>
+                            <span class="info-value">${new Date(g.lastHeartbeat).toLocaleTimeString()}</span>
+                        </div>` : ''}
+                    </div>
+                    ${g.status === 'running' && g.isLongRunning ? `
+                        <div class="goroutine-controls">
+                            <button onclick="controlGoroutine('${g.id}', 'pause')">Pause</button>
+                            <button onclick="controlGoroutine('${g.id}', 'terminate')">Terminate</button>
+                        </div>
+                    ` : ''}
+                    ${g.status === 'paused' ? `
+                        <div class="goroutine-controls">
+                            <button onclick="controlGoroutine('${g.id}', 'resume')">Resume</button>
+                            <button onclick="controlGoroutine('${g.id}', 'terminate')">Terminate</button>
+                        </div>
+                    ` : ''}
+                `;
+
+                goroutineListEl.appendChild(div);
+            });
+        } async function controlGoroutine(id, action) {
+            try {
+                // Find the goroutine by ID to get the name for the API call
+                const goroutineInfo = activeGoroutines.get(id);
+                if (!goroutineInfo) {
+                    console.error('Goroutine not found:', id);
+                    return;
+                }
+
+                // Use the goroutine name for the API call (backend expects name)
+                const response = await fetch(`/api/goroutine/control?name=${encodeURIComponent(goroutineInfo.name)}&action=${action}`);
+                const result = await response.json();
+                console.log(`Goroutine ${name} ${action}:`, result);
+
+                // Refresh the list immediately
+                setTimeout(refreshGoroutines, 500);
+            } catch (error) {
+                console.error(`Failed to ${action} goroutine ${name}:`, error);
+            }
+        }
+
+        let ws;
+        function connect() {
+            if (ws) ws.close();
+            ws = new WebSocket(`ws://${location.host}/ws`);
+
+            ws.onopen = () => {
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'status connected';
+            };
+
+            ws.onclose = () => {
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'status disconnected';
+            };
+
+            ws.onerror = () => {
+                statusEl.textContent = 'Connection Error';
+                statusEl.className = 'status disconnected';
+            };
+
+            ws.onmessage = evt => {
+                const e = JSON.parse(evt.data);
+                handleEvent(e);
+            };
+        }
+
+        // Track active goroutines
+        const activeGoroutines = new Map();
+
+        function handleEvent(e) {
+            const g = e.goroutine;
+            const gId = e.goroutineId || e.goroutine;
+
+            // Handle goroutine lifecycle
+            if (e.type === 'GoStart') {
+                activeGoroutines.set(gId, {
+                    id: gId,
+                    name: g,
+                    status: e.status || 'running',
+                    startTime: e.ts,
+                    params: e.params,
+                    paramTypes: e.paramTypes,
+                    lastActivity: e.ts,
+                    activityCount: 0,
+                    activities: [] // Store actual activity details
+                });
+            } else if (e.type === 'GoEnd') {
+                if (activeGoroutines.has(gId)) {
+                    const goroutineInfo = activeGoroutines.get(gId);
+                    goroutineInfo.status = 'terminated';
+                    goroutineInfo.endTime = e.ts;
+                    goroutineInfo.duration = e.duration;
+                    goroutineInfo.response = e.response;
+                    goroutineInfo.respType = e.respType;
+                }
+            } else if (e.isUpdate && activeGoroutines.has(gId)) {
+                // Update existing goroutine data
+                const goroutineInfo = activeGoroutines.get(gId);
+                goroutineInfo.lastActivity = e.ts;
+                goroutineInfo.activityCount++;
+
+                // Store the activity details
+                goroutineInfo.activities.push({
+                    timestamp: e.ts,
+                    type: e.type,
+                    text: e.text || e.type,
+                    value: e.value,
+                    response: e.response,
+                    params: e.params,
+                    name: e.name,
+                    // APM span fields
+                    spanId: e.spanId,
+                    parentSpan: e.parentSpan,
+                    operation: e.operation,
+                    service: e.service,
+                    tags: e.tags,
+                    error: e.error,
+                    duration: e.duration,
+                    metadata: e.metadata,
+                    startTime: e.startTime,
+                    endTime: e.endTime
+                });
+
+                // Keep only last 100 activities to prevent memory issues
+                if (goroutineInfo.activities.length > 100) {
+                    goroutineInfo.activities = goroutineInfo.activities.slice(-100);
+                }
+
+                if (e.status) {
+                    goroutineInfo.status = e.status;
+                }
+                if (e.response) {
+                    goroutineInfo.lastResponse = e.response;
+                }
+                if (e.value) {
+                    goroutineInfo.lastValue = e.value;
+                }
+
+                // Don't add to event log for updates to long-running goroutines
+                if (e.type === 'StatusChange' || ['HTTPRequest', 'DBQuery', 'TaskProcessed', 'SpanStart', 'SpanEnd'].includes(e.type)) {
+                    // Only add important events to log
+                    addEventToLog(e);
+                } else {
+                    // Just update visualization
+                    updateVisualization(e, g);
+                    return;
+                }
+            } else if (['SpanStart', 'SpanEnd'].includes(e.type) && activeGoroutines.has(gId)) {
+                // Handle span events specifically
+                const goroutineInfo = activeGoroutines.get(gId);
+                if (!goroutineInfo.activities) {
+                    goroutineInfo.activities = [];
+                }
+
+                goroutineInfo.activities.push({
+                    timestamp: e.ts,
+                    type: e.type,
+                    text: e.text || e.type,
+                    value: e.value,
+                    response: e.response,
+                    params: e.params,
+                    name: e.name,
+                    // APM span fields
+                    spanId: e.spanId,
+                    parentSpan: e.parentSpan,
+                    operation: e.operation,
+                    service: e.service,
+                    tags: e.tags,
+                    error: e.error,
+                    duration: e.duration,
+                    metadata: e.metadata,
+                    startTime: e.startTime,
+                    endTime: e.endTime
+                });
+
+                // Keep only last 100 activities to prevent memory issues
+                if (goroutineInfo.activities.length > 100) {
+                    goroutineInfo.activities = goroutineInfo.activities.slice(-100);
+                }
+
+                goroutineInfo.activityCount++;
+                goroutineInfo.lastActivity = e.ts;
+            }
+
+            // Track activities for all events related to goroutines
+            if (activeGoroutines.has(gId) && e.type !== 'GoStart' && e.type !== 'TraceStart' && e.type !== 'TraceEnd') {
+                const goroutineInfo = activeGoroutines.get(gId);
+                if (!goroutineInfo.activities) {
+                    goroutineInfo.activities = [];
+                }
+
+                goroutineInfo.activities.push({
+                    timestamp: e.ts,
+                    type: e.type,
+                    text: e.text || e.type,
+                    value: e.value,
+                    response: e.response,
+                    params: e.params,
+                    name: e.name,
+                    // APM span fields
+                    spanId: e.spanId,
+                    parentSpan: e.parentSpan,
+                    operation: e.operation,
+                    service: e.service,
+                    tags: e.tags,
+                    error: e.error,
+                    duration: e.duration,
+                    metadata: e.metadata
+                });                // Keep only last 100 activities to prevent memory issues
+                if (goroutineInfo.activities.length > 100) {
+                    goroutineInfo.activities = goroutineInfo.activities.slice(-100);
+                }
+
+                if (!e.isUpdate) {
+                    goroutineInfo.activityCount++;
+                }
+            }
+
+            // Add event to log (for non-update events or important updates)
+            addEventToLog(e);
+
+            // Update visualization
+            updateVisualization(e, g);
+        }
+
+        function addEventToLog(e) {
+            // Skip heartbeat and frequent update events to reduce noise
+            if (e.type === 'Heartbeat' || (e.isUpdate && ['HTTPRequest', 'DBQuery', 'TaskProcessed'].includes(e.type) && eventCount > 20)) {
+                return;
+            }
+
+            // Remove old events if we have too many
+            if (eventCount >= maxEvents) {
+                const firstEvent = eventLogEl.firstChild;
+                if (firstEvent) {
+                    eventLogEl.removeChild(firstEvent);
+                    eventCount--;
+                }
+            }
+
+            const eventDiv = document.createElement('div');
+            eventDiv.className = `event-item ${getEventClass(e.type)}`;
+
+            // Enhanced event display
+            let statusBadge = '';
+            if (e.status) {
+                statusBadge = `<span class="goroutine-status ${e.status}">${e.status}</span>`;
+            }
+
+            let updateIndicator = '';
+            if (e.isUpdate) {
+                updateIndicator = '<span style="color: #569cd6; font-size: 10px;">[UPDATE]</span> ';
+            }
+
+            eventDiv.innerHTML = `
+                <div class="event-header">
+                    <span class="event-type">${updateIndicator}${e.type}</span>
+                    <div>
+                        ${statusBadge}
+                        <span class="event-time">${e.ts.toFixed(3)}s</span>
+                    </div>
+                </div>
+                <div class="event-goroutine">Goroutine: ${e.goroutine}</div>
+                ${e.text ? `<div style="margin-top: 5px; color: #d4d4d4;">${e.text}</div>` : ''}
+                ${createEventDetails(e)}
+                ${e.memUsage ? `<div style="margin-top: 5px; color: #808080; font-size: 10px;">${e.memUsage}</div>` : ''}
+            `;
+
+            eventLogEl.appendChild(eventDiv);
+            eventCount++;
+
+            // Remove auto-scroll to allow user interaction
+            // eventDiv.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
+
+        function createEventDetails(e) {
+            let details = '';
+            if (e.name || e.params || e.paramTypes || e.response || e.respType || e.value) {
+                details += '<div class="event-details">';
+
+                if (e.name) {
+                    details += `<div class="detail-row"><span class="detail-label">Name:</span><span class="detail-value">${e.name}</span></div>`;
+                }
+                if (e.params) {
+                    details += `<div class="detail-row"><span class="detail-label">Params:</span><span class="detail-value">${e.params}</span></div>`;
+                }
+                if (e.paramTypes) {
+                    details += `<div class="detail-row"><span class="detail-label">Types:</span><span class="detail-value">${e.paramTypes}</span></div>`;
+                }
+                if (e.value) {
+                    details += `<div class="detail-row"><span class="detail-label">Value:</span><span class="detail-value">${e.value}</span></div>`;
+                }
+                if (e.response) {
+                    details += `<div class="detail-row"><span class="detail-label">Response:</span><span class="detail-value">${e.response}</span></div>`;
+                }
+                if (e.respType) {
+                    details += `<div class="detail-row"><span class="detail-label">RespType:</span><span class="detail-value">${e.respType}</span></div>`;
+                }
+
+                details += '</div>';
+            }
+            return details;
+        }
+
+        function getEventClass(type) {
+            if (type === 'GoStart') return 'go-start';
+            if (type === 'GoEnd') return 'go-end';
+            if (type.startsWith('Chan')) return type.includes('Send') ? 'chan-send' : 'chan-recv';
+            if (type.startsWith('Mutex')) return type.includes('Lock') ? 'mutex-lock' : 'mutex-unlock';
+            if (type.startsWith('Region')) return 'region';
+            return '';
+        }
+
+        function updateVisualization(e, g) {
+            // Create/update node
+            if (!nodes.get(g)) {
+                nodes.add({
+                    id: g,
+                    label: g,
+                    title: e.stack || g,
+                    color: { background: '#333333', border: '#666666' }
+                });
+            }
+
+            // Color by event type
+            let color = { background: '#666666', border: '#999999' };
+            if (e.type === "GoStart") color = { background: '#4caf50', border: '#388e3c' };
+            else if (e.type === "GoEnd") color = { background: '#f44336', border: '#d32f2f' };
+            else if (e.type.startsWith("Chan")) color = { background: '#2196f3', border: '#1976d2' };
+            else if (e.type.startsWith("Mutex")) color = { background: '#ff9800', border: '#f57c00' };
+            else if (e.type.startsWith("Region")) color = { background: '#9c27b0', border: '#7b1fa2' };
+
+            nodes.update({ id: g, color });
+
+            // Draw edges for channel & mutex ops
+            if (e.type === "ChanSend") {
+                const cid = `chan:${e.name}`;
+                if (!nodes.get(cid)) {
+                    nodes.add({
+                        id: cid,
+                        label: e.name,
+                        shape: 'box',
+                        color: { background: '#1565c0', border: '#0d47a1' },
+                        font: { color: '#ffffff' }
+                    });
+                }
+                edges.add({
+                    id: `${g}-send-${cid}-${Date.now()}`,
+                    from: g,
+                    to: cid,
+                    label: `send: ${e.value || 'data'}`,
+                    color: { color: '#2196f3' }
+                });
+            }
+            if (e.type === "ChanReceived") {
+                const cid = `chan:${e.name}`;
+                edges.add({
+                    id: `${cid}-recv-${g}-${Date.now()}`,
+                    from: cid,
+                    to: g,
+                    label: `recv: ${e.value || 'data'}`,
+                    color: { color: '#03a9f4' }
+                });
+            }
+            if (e.type === "MutexLock") {
+                const mid = `mu:${e.name}`;
+                if (!nodes.get(mid)) {
+                    nodes.add({
+                        id: mid,
+                        label: e.name,
+                        shape: 'triangle',
+                        color: { background: '#f57c00', border: '#ef6c00' },
+                        font: { color: '#ffffff' }
+                    });
+                }
+                edges.add({
+                    id: `${g}-lock-${mid}-${Date.now()}`,
+                    from: g,
+                    to: mid,
+                    label: 'lock',
+                    color: { color: '#ff9800' }
+                });
+            }
+            if (e.type === "MutexUnlocked") {
+                const mid = `mu:${e.name}`;
+                edges.add({
+                    id: `${mid}-unlock-${g}-${Date.now()}`,
+                    from: mid,
+                    to: g,
+                    label: 'unlock',
+                    color: { color: '#ffc107' }
+                });
+            }
+            // Region boundaries as self-loops
+            if (e.type === "RegionStart") {
+                edges.add({
+                    id: `${g}-region-start-${e.name}-${Date.now()}`,
+                    from: g,
+                    to: g,
+                    label: `▶${e.name}`,
+                    color: { color: '#9c27b0' },
+                    font: { align: "horizontal" }
+                });
+            }
+            if (e.type === "RegionEnd") {
+                edges.add({
+                    id: `${g}-region-end-${e.name}-${Date.now()}`,
+                    from: g,
+                    to: g,
+                    label: `◀${e.name}`,
+                    color: { color: '#9c27b0' },
+                    font: { align: "horizontal" }
+                });
+            }
+        }
+
+        // Activities Modal Functions
+        function showActivities(goroutineId) {
+            const goroutineInfo = activeGoroutines.get(goroutineId);
+            if (!goroutineInfo) {
+                console.error('Goroutine not found:', goroutineId);
+                return;
+            }
+
+            const modal = document.getElementById('activitiesModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const activitiesContainer = document.getElementById('activitiesContainer');
+
+            // Set modal title
+            const displayName = goroutineInfo.id !== goroutineInfo.name ?
+                `${goroutineInfo.name} (ID: ${goroutineInfo.id})` : goroutineInfo.name;
+            modalTitle.textContent = `Activities for ${displayName}`;
+
+            // Clear previous content
+            activitiesContainer.innerHTML = '';
+
+            if (!goroutineInfo.activities || goroutineInfo.activities.length === 0) {
+                activitiesContainer.innerHTML = '<p style="color: #888; text-align: center; padding: 20px;">No activities recorded</p>';
+            } else {
+                // Sort activities by timestamp (newest first)
+                const sortedActivities = [...goroutineInfo.activities].sort((a, b) => b.timestamp - a.timestamp);
+
+                sortedActivities.forEach((activity, index) => {
+                    const activityDiv = document.createElement('div');
+                    activityDiv.className = 'activity-item';
+
+                    const timestamp = new Date((startTime.getTime() + activity.timestamp * 1000)).toLocaleTimeString();
+
+                    // Check if this is a span event for APM-style display
+                    const isSpan = activity.type === 'SpanStart' || activity.type === 'SpanEnd';
+
+                    let spanInfo = '';
+                    if (isSpan && activity.operation) {
+                        const durationText = activity.duration ? ` (${(activity.duration * 1000).toFixed(2)}ms)` : '';
+                        const errorText = activity.error ? ` ❌ ${activity.error}` : '';
+                        const serviceText = activity.service ? ` [${activity.service}]` : '';
+                        const spanIdText = activity.spanId ? ` (Span: ${activity.spanId})` : '';
+
+                        spanInfo = `
+                            <div style="margin-bottom: 8px;">
+                                <strong>${activity.operation}${serviceText}${durationText}${errorText}${spanIdText}</strong>
+                            </div>
+                        `;
+
+                        // Add span tags if available
+                        if (activity.tags && Object.keys(activity.tags).length > 0) {
+                            spanInfo += '<div style="margin-bottom: 6px; font-size: 10px; color: #888;">Tags:</div>';
+                            Object.entries(activity.tags).forEach(([key, value]) => {
+                                spanInfo += `<div style="font-size: 10px; color: #ce9178; margin-left: 10px;">${key}: ${value}</div>`;
+                            });
+                        }
+
+                        // Add metadata if available
+                        if (activity.metadata && Object.keys(activity.metadata).length > 0) {
+                            spanInfo += '<div style="margin-top: 6px; margin-bottom: 6px; font-size: 10px; color: #888;">Metadata:</div>';
+                            Object.entries(activity.metadata).forEach(([key, value]) => {
+                                spanInfo += `<div style="font-size: 10px; color: #dcdcaa; margin-left: 10px;">${key}: ${value}</div>`;
+                            });
+                        }
+                    }
+
+                    // Build activity content
+                    let activityContent = `
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <div>
+                                <span style="font-weight: bold; color: ${isSpan ? '#569cd6' : '#4ec9b0'};">${activity.type}</span>
+                                ${activity.text ? `<span style="margin-left: 8px; color: #dcdcaa;">${activity.text}</span>` : ''}
+                            </div>
+                            <div style="font-size: 10px; color: #888;">${timestamp}</div>
+                        </div>
+                    `;
+
+                    // Add span information
+                    if (spanInfo) {
+                        activityContent += spanInfo;
+                    }
+
+                    // Add regular activity fields for non-span events
+                    if (!isSpan) {
+                        if (activity.params) {
+                            activityContent += `<div style="margin-bottom: 6px;"><strong>Params:</strong> <code>${JSON.stringify(activity.params)}</code></div>`;
+                        }
+                        if (activity.value) {
+                            activityContent += `<div style="margin-bottom: 6px;"><strong>Value:</strong> <code>${JSON.stringify(activity.value)}</code></div>`;
+                        }
+                        if (activity.response) {
+                            activityContent += `<div style="margin-bottom: 6px;"><strong>Response:</strong> <code>${JSON.stringify(activity.response)}</code></div>`;
+                        }
+                    }
+
+                    activityDiv.innerHTML = activityContent;
+                    activitiesContainer.appendChild(activityDiv);
+                });
+            }
+
+            // Show the modal
+            modal.style.display = 'block';
+        }
+
+        function closeActivitiesModal() {
+            const modal = document.getElementById('activitiesModal');
+            modal.style.display = 'none';
+        }
+
+        // Close modal when clicking outside of it
+        window.onclick = function (event) {
+            const modal = document.getElementById('activitiesModal');
+            if (event.target === modal) {
+                closeActivitiesModal();
+            }
+        }
+    </script>
+</body>
+
+</html>

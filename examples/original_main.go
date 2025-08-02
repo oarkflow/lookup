@@ -9,7 +9,7 @@ import (
 	"github.com/oarkflow/lookup"
 )
 
-func mai1n() {
+func mai2n() {
 	// Create enhanced index with all features enabled
 	fmt.Println("🚀 Creating Enhanced Full-Text Search Engine...")
 

@@ -10,7 +10,7 @@ import (
 	"github.com/oarkflow/lookup"
 )
 
-func main() {
+func mai1n() {
 	log.Println("🚀 Starting High-Performance Search Engine Manager Demo...")
 
 	// Create high-performance manager with custom configuration
