@@ -5,12 +5,543 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"net"
 	"net/http"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// FastTokenization provides optimized tokenization with SIMD-like processing
+type FastTokenization struct {
+	bufferPool sync.Pool
+}
+
+// NewFastTokenization creates a new fast tokenization instance
+func NewFastTokenization() *FastTokenization {
+	return &FastTokenization{
+		bufferPool: sync.Pool{
+			New: func() interface{} {
+				return make([]byte, 0, 4096)
+			},
+		},
+	}
+}
+
+// TokenizeFast performs high-performance tokenization
+func (ft *FastTokenization) TokenizeFast(text string) []string {
+	if len(text) == 0 {
+		return nil
+	}
+
+	buf := ft.bufferPool.Get().([]byte)
+	defer ft.bufferPool.Put(buf[:0])
+
+	buf = append(buf, text...)
+	ft.toLowerInPlace(buf)
+
+	var tokens []string
+	i := 0
+	for i < len(buf) {
+		// Skip non-alphanumeric characters
+		for i < len(buf) && !ft.isAlphaNum(buf[i]) {
+			i++
+		}
+
+		if i >= len(buf) {
+			break
+		}
+
+		start := i
+		// Process token
+		for i < len(buf) && ft.isAlphaNum(buf[i]) {
+			i++
+		}
+
+		if start < i {
+			tokens = append(tokens, string(buf[start:i]))
+		}
+	}
+
+	return tokens
+}
+
+// toLowerInPlace converts ASCII uppercase to lowercase in-place
+func (ft *FastTokenization) toLowerInPlace(buf []byte) {
+	for i := 0; i < len(buf); i++ {
+		if buf[i] >= 'A' && buf[i] <= 'Z' {
+			buf[i] += 32 // 'a' - 'A' = 32
+		}
+	}
+}
+
+// isAlphaNum checks if byte is alphanumeric
+func (ft *FastTokenization) isAlphaNum(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+// OptimizedTokenization provides SIMD-accelerated tokenization
+type OptimizedTokenization struct {
+	ft *FastTokenization
+}
+
+// NewOptimizedTokenization creates optimized tokenization
+func NewOptimizedTokenization() *OptimizedTokenization {
+	return &OptimizedTokenization{
+		ft: NewFastTokenization(),
+	}
+}
+
+// TokenizeOptimized performs optimized tokenization with stemming
+func (ot *OptimizedTokenization) TokenizeOptimized(text string) []string {
+	tokens := ot.ft.TokenizeFast(text)
+
+	// Apply fast stemming in-place
+	for i, token := range tokens {
+		if len(token) > 3 {
+			tokens[i] = ot.fastStem(token)
+		}
+	}
+
+	return tokens
+}
+
+// fastStem applies fast stemming rules
+func (ot *OptimizedTokenization) fastStem(word string) string {
+	if len(word) <= 3 {
+		return word
+	}
+
+	// Fast suffix removal
+	switch {
+	case strings.HasSuffix(word, "ing"):
+		if len(word) > 4 {
+			stem := word[:len(word)-3]
+			// Remove double consonants (except l, s, z)
+			if len(stem) > 2 {
+				last := stem[len(stem)-1]
+				if last == stem[len(stem)-2] && last != 'l' && last != 's' && last != 'z' {
+					return stem[:len(stem)-1]
+				}
+			}
+			return stem
+		}
+	case strings.HasSuffix(word, "ly"):
+		if len(word) > 4 {
+			return word[:len(word)-2]
+		}
+	case strings.HasSuffix(word, "ed"):
+		if len(word) > 4 {
+			return word[:len(word)-2]
+		}
+	case strings.HasSuffix(word, "ies"):
+		if len(word) > 4 {
+			return word[:len(word)-3] + "y"
+		}
+	case strings.HasSuffix(word, "s"):
+		if len(word) > 3 && word[len(word)-2] != 's' {
+			return word[:len(word)-1]
+		}
+	}
+
+	return word
+}
+
+// HighPerformanceIndex provides optimized indexing with reduced allocations
+type HighPerformanceIndex struct {
+	*Index
+	tokenizer  *OptimizedTokenization
+	docBuffer  []GenericRecord
+	bufferSize int
+	bufferMu   sync.Mutex
+}
+
+// NewHighPerformanceIndex creates a high-performance index
+func NewHighPerformanceIndex(id string, bufferSize int, opts ...Options) *HighPerformanceIndex {
+	tokenizer := NewOptimizedTokenization()
+	opts = append(opts, WithNumOfWorkers(runtime.NumCPU()*2)) // More workers
+
+	hpi := &HighPerformanceIndex{
+		Index:      NewIndex(id, opts...),
+		tokenizer:  tokenizer,
+		docBuffer:  make([]GenericRecord, 0, bufferSize),
+		bufferSize: bufferSize,
+	}
+
+	// Override the document processing to use optimized tokenization
+	hpi.Index.addDocChan = make(chan GenericRecord, 10000)
+
+	go hpi.processOptimizedBatchLoop()
+
+	return hpi
+}
+
+// processOptimizedBatchLoop processes documents with optimized tokenization
+func (hpi *HighPerformanceIndex) processOptimizedBatchLoop() {
+	flushThreshold := 2000 // Larger batch for better throughput
+	batchPtr := batchPool.Get().(*[]GenericRecord)
+	batch := *batchPtr
+	batch = batch[:0]
+	ticker := time.NewTicker(100 * time.Millisecond) // More frequent flushing
+	defer func() {
+		ticker.Stop()
+		batchPool.Put(&batch)
+	}()
+
+	for {
+		select {
+		case rec, ok := <-hpi.Index.addDocChan:
+			if !ok {
+				if len(batch) > 0 {
+					hpi.processOptimizedBatch(batch)
+				}
+				return
+			}
+			batch = append(batch, rec)
+			if len(batch) >= flushThreshold {
+				hpi.processOptimizedBatch(batch)
+				batch = batch[:0]
+			}
+		case <-ticker.C:
+			if len(batch) > 0 {
+				hpi.processOptimizedBatch(batch)
+				batch = batch[:0]
+			}
+		}
+	}
+}
+
+// processOptimizedBatch processes a batch with optimized tokenization
+func (hpi *HighPerformanceIndex) processOptimizedBatch(recs []GenericRecord) {
+	partial := partialIndex{
+		docs:     make(map[int64]GenericRecord),
+		lengths:  make(map[int64]int),
+		inverted: make(map[string][]Posting),
+	}
+
+	for _, rec := range recs {
+		docID := hpi.extractDocID(rec)
+		combined := rec.String(hpi.FieldsToIndex, hpi.IndexFieldsExcept)
+		tokens := hpi.tokenizer.TokenizeOptimized(combined)
+
+		partial.docs[docID] = rec
+		docLen := 0
+		freqMap := make(map[string]int, len(tokens))
+
+		for _, token := range tokens {
+			freqMap[token]++
+		}
+
+		for term, count := range freqMap {
+			partial.inverted[term] = append(partial.inverted[term], Posting{DocID: docID, Frequency: count})
+			docLen += count
+		}
+
+		partial.lengths[docID] = docLen
+		partial.totalDocs++
+	}
+
+	hpi.mergePartial(partial)
+}
+
+// FastCache provides high-performance caching with uint64 keys
+type FastCache struct {
+	entries  map[uint64]cacheEntry
+	lru      []uint64
+	capacity int
+	mu       sync.RWMutex
+}
+
+// NewFastCache creates a fast cache with uint64 keys
+func NewFastCache(capacity int) *FastCache {
+	return &FastCache{
+		entries:  make(map[uint64]cacheEntry, capacity),
+		lru:      make([]uint64, 0, capacity),
+		capacity: capacity,
+	}
+}
+
+// Get retrieves a value from the cache
+func (fc *FastCache) Get(key uint64) ([]ScoredDoc, bool) {
+	fc.mu.RLock()
+	entry, exists := fc.entries[key]
+	fc.mu.RUnlock()
+
+	if !exists || time.Now().After(entry.expiry) {
+		return nil, false
+	}
+
+	// Move to front (simple LRU)
+	fc.mu.Lock()
+	fc.moveToFront(key)
+	fc.mu.Unlock()
+
+	return entry.data, true
+}
+
+// Put stores a value in the cache
+func (fc *FastCache) Put(key uint64, value []ScoredDoc, expiry time.Time) {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+
+	if len(fc.entries) >= fc.capacity {
+		fc.evictLRU()
+	}
+
+	fc.entries[key] = cacheEntry{data: value, expiry: expiry}
+	fc.lru = append(fc.lru, key)
+}
+
+// moveToFront moves a key to the front of LRU list
+func (fc *FastCache) moveToFront(key uint64) {
+	for i, k := range fc.lru {
+		if k == key {
+			copy(fc.lru[i:], fc.lru[i+1:])
+			fc.lru[len(fc.lru)-1] = key
+			break
+		}
+	}
+}
+
+// evictLRU removes the least recently used entry
+func (fc *FastCache) evictLRU() {
+	if len(fc.lru) == 0 {
+		return
+	}
+
+	lruKey := fc.lru[0]
+	delete(fc.entries, lruKey)
+	fc.lru = fc.lru[1:]
+}
+
+// ParallelQueryProcessor provides parallel query processing
+type ParallelQueryProcessor struct {
+	workers int
+}
+
+// NewParallelQueryProcessor creates a parallel query processor
+func NewParallelQueryProcessor(workers int) *ParallelQueryProcessor {
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+	return &ParallelQueryProcessor{workers: workers}
+}
+
+// ProcessParallel processes queries in parallel
+func (pqp *ParallelQueryProcessor) ProcessParallel(index *Index, queries []Query, tokens [][]string) ([][]int64, error) {
+	if len(queries) == 0 {
+		return nil, nil
+	}
+
+	results := make([][]int64, len(queries))
+	jobs := make(chan int, len(queries))
+	resultsChan := make(chan struct {
+		index  int
+		result []int64
+	}, len(queries))
+
+	// Start workers
+	for i := 0; i < pqp.workers; i++ {
+		go func() {
+			for jobIndex := range jobs {
+				query := queries[jobIndex]
+				result := query.Evaluate(index)
+				resultsChan <- struct {
+					index  int
+					result []int64
+				}{jobIndex, result}
+			}
+		}()
+	}
+
+	// Send jobs
+	go func() {
+		for i := range queries {
+			jobs <- i
+		}
+		close(jobs)
+	}()
+
+	// Collect results
+	for i := 0; i < len(queries); i++ {
+		res := <-resultsChan
+		results[res.index] = res.result
+	}
+
+	return results, nil
+}
+
+// OptimizedBM25 provides faster BM25 scoring with pre-computed values
+type OptimizedBM25 struct {
+	k1, b     float64
+	idfCache  map[string]float64
+	mu        sync.RWMutex
+	cacheSize int
+}
+
+// NewOptimizedBM25 creates optimized BM25 scorer
+func NewOptimizedBM25(k1, b float64) *OptimizedBM25 {
+	return &OptimizedBM25{
+		k1:        k1,
+		b:         b,
+		idfCache:  make(map[string]float64),
+		cacheSize: 0,
+	}
+}
+
+// ScoreOptimized performs optimized BM25 scoring
+func (obm25 *OptimizedBM25) ScoreOptimized(index *Index, queryTokens []string, docID int64, docLength float64) float64 {
+	score := 0.0
+	avgDocLength := index.AvgDocLength
+
+	// For small queries, avoid mutex overhead
+	if len(queryTokens) <= 3 {
+		return obm25.scoreWithoutCache(index, queryTokens, docID, docLength, avgDocLength)
+	}
+
+	for _, term := range queryTokens {
+		// Get cached IDF or compute it
+		obm25.mu.RLock()
+		idf, exists := obm25.idfCache[term]
+		obm25.mu.RUnlock()
+
+		if !exists {
+			if postings, ok := index.index[term]; ok {
+				df := float64(len(postings))
+				idf = math.Log((float64(index.TotalDocs)-df+0.5)/(df+0.5) + 1)
+			} else {
+				continue
+			}
+
+			// Cache the IDF (with size limit to prevent unbounded growth)
+			obm25.mu.Lock()
+			if obm25.cacheSize < 1000 { // Limit cache size
+				obm25.idfCache[term] = idf
+				obm25.cacheSize++
+			}
+			obm25.mu.Unlock()
+		}
+
+		// Find term frequency for this document
+		var tf int
+		if postings, ok := index.index[term]; ok {
+			for _, p := range postings {
+				if p.DocID == docID {
+					tf = p.Frequency
+					break
+				}
+			}
+		}
+
+		if tf == 0 {
+			continue
+		}
+
+		// BM25 formula
+		tfScore := (float64(tf) * (obm25.k1 + 1)) / (float64(tf) + obm25.k1*(1-obm25.b+obm25.b*(docLength/avgDocLength)))
+		score += idf * tfScore
+	}
+
+	return score
+}
+
+// scoreWithoutCache performs BM25 scoring without caching (for small queries)
+func (obm25 *OptimizedBM25) scoreWithoutCache(index *Index, queryTokens []string, docID int64, docLength, avgDocLength float64) float64 {
+	score := 0.0
+
+	for _, term := range queryTokens {
+		// Compute IDF directly
+		var idf float64
+		if postings, ok := index.index[term]; ok {
+			df := float64(len(postings))
+			idf = math.Log((float64(index.TotalDocs)-df+0.5)/(df+0.5) + 1)
+		} else {
+			continue
+		}
+
+		// Find term frequency for this document
+		var tf int
+		if postings, ok := index.index[term]; ok {
+			for _, p := range postings {
+				if p.DocID == docID {
+					tf = p.Frequency
+					break
+				}
+			}
+		}
+
+		if tf == 0 {
+			continue
+		}
+
+		// BM25 formula
+		tfScore := (float64(tf) * (obm25.k1 + 1)) / (float64(tf) + obm25.k1*(1-obm25.b+obm25.b*(docLength/avgDocLength)))
+		score += idf * tfScore
+	}
+
+	return score
+}
+
+// MemoryPool provides object pooling for reduced GC pressure
+type MemoryPool struct {
+	scoredDocPool sync.Pool
+	postingPool   sync.Pool
+	tokenPool     sync.Pool
+}
+
+// NewMemoryPool creates a memory pool
+func NewMemoryPool() *MemoryPool {
+	return &MemoryPool{
+		scoredDocPool: sync.Pool{
+			New: func() interface{} {
+				s := make([]ScoredDoc, 0, 1024)
+				return &s
+			},
+		},
+		postingPool: sync.Pool{
+			New: func() interface{} {
+				p := make([]Posting, 0, 512)
+				return &p
+			},
+		},
+		tokenPool: sync.Pool{
+			New: func() interface{} {
+				t := make([]string, 0, 64)
+				return &t
+			},
+		},
+	}
+}
+
+// GetScoredDocs gets a scored docs slice from pool
+func (mp *MemoryPool) GetScoredDocs() *[]ScoredDoc {
+	return mp.scoredDocPool.Get().(*[]ScoredDoc)
+}
+
+// PutScoredDocs returns a scored docs slice to pool
+func (mp *MemoryPool) PutScoredDocs(s *[]ScoredDoc) {
+	*s = (*s)[:0]
+	mp.scoredDocPool.Put(s)
+}
+
+// GetPostings gets a postings slice from pool
+func (mp *MemoryPool) GetPostings() *[]Posting {
+	return mp.postingPool.Get().(*[]Posting)
+}
+
+// PutPostings returns a postings slice to pool
+func (mp *MemoryPool) PutPostings(p *[]Posting) {
+	*p = (*p)[:0]
+	mp.postingPool.Put(p)
+}
+
+// GetTokens gets a tokens slice from pool
+func (mp *MemoryPool) GetTokens() *[]string {
+	return mp.tokenPool.Get().(*[]string)
+}
 
 // Connection types for the connection pool
 type HTTPConnection struct {
@@ -101,7 +632,7 @@ func logBase2(x float64) float64 {
 		return -10 // Fallback for edge case
 	}
 	// Simple approximation: log2(x) ≈ log(x) / log(2)
-	return -x // Simplified for this use case
+	return math.Log(x) / math.Log(2)
 }
 
 // CompressedIndex provides compression for the inverted index
@@ -592,6 +1123,7 @@ type AsyncIndexer struct {
 	wg        sync.WaitGroup
 	ctx       context.Context
 	cancel    context.CancelFunc
+	index     *Index // Reference to the main index
 }
 
 // IndexWork represents work to be done by the indexer
@@ -603,13 +1135,14 @@ type IndexWork struct {
 }
 
 // NewAsyncIndexer creates a new async indexer
-func NewAsyncIndexer(workers int, queueSize int) *AsyncIndexer {
+func NewAsyncIndexer(workers int, queueSize int, index *Index) *AsyncIndexer {
 	ctx, cancel := context.WithCancel(context.Background())
 	ai := &AsyncIndexer{
 		workQueue: make(chan IndexWork, queueSize),
 		workers:   workers,
 		ctx:       ctx,
 		cancel:    cancel,
+		index:     index,
 	}
 
 	// Start workers
@@ -660,8 +1193,8 @@ func (ai *AsyncIndexer) processWork(work IndexWork) error {
 		}
 	case "update":
 		// Handle document updates
-		if work.Document != nil {
-			return ai.updateDocument(work.Document)
+		if work.Document != nil && work.DocumentID != "" {
+			return ai.updateDocument(work.DocumentID, work.Document)
 		}
 	case "delete":
 		// Handle document deletion
@@ -679,32 +1212,33 @@ func (ai *AsyncIndexer) processWork(work IndexWork) error {
 
 // indexDocument indexes a single document
 func (ai *AsyncIndexer) indexDocument(doc GenericRecord) error {
-	// This would integrate with the main index
-	// For now, simulate work
-	time.Sleep(10 * time.Millisecond)
+	ai.index.AddDocument(doc)
 	return nil
 }
 
 // updateDocument updates an existing document
-func (ai *AsyncIndexer) updateDocument(doc GenericRecord) error {
-	// This would update the document in the main index
-	// For now, simulate work
-	time.Sleep(15 * time.Millisecond)
-	return nil
+func (ai *AsyncIndexer) updateDocument(docID string, doc GenericRecord) error {
+	// Parse docID to int64
+	id, err := strconv.ParseInt(docID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid document ID: %v", err)
+	}
+	return ai.index.UpdateDocument(id, doc)
 }
 
 // deleteDocument removes a document from the index
 func (ai *AsyncIndexer) deleteDocument(docID string) error {
-	// This would remove the document from the main index
-	// For now, simulate work
-	time.Sleep(5 * time.Millisecond)
-	return nil
+	// Parse docID to int64
+	id, err := strconv.ParseInt(docID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid document ID: %v", err)
+	}
+	return ai.index.DeleteDocument(id)
 }
 
 // optimizeIndex performs index optimization
 func (ai *AsyncIndexer) optimizeIndex() error {
-	// This would optimize the main index
-	// For now, simulate work
+	// For now, simulate work - in a real implementation, this would optimize the index
 	time.Sleep(100 * time.Millisecond)
 	return nil
 }
@@ -715,4 +1249,31 @@ func (ai *AsyncIndexer) Close() error {
 	close(ai.workQueue)
 	ai.wg.Wait()
 	return nil
+}
+
+// FastQueryHash generates a fast hash for query caching
+func FastQueryHash(query string, page, size int, filters []interface{}) uint64 {
+	// Use a simple hash for small queries to reduce overhead
+	if len(query) < 50 && len(filters) == 0 {
+		// Simple hash for small queries
+		h := uint64(0)
+		for i, c := range query {
+			h = h*31 + uint64(c) + uint64(page)*7 + uint64(size)*13
+			if i > 20 { // Limit hash computation for very long queries
+				break
+			}
+		}
+		return h
+	}
+
+	// Use FNV for larger queries or queries with filters
+	h := fnv.New64a()
+	h.Write([]byte(query))
+	h.Write([]byte(fmt.Sprintf("%d%d", page, size)))
+
+	for _, f := range filters {
+		h.Write([]byte(fmt.Sprintf("%v", f)))
+	}
+
+	return h.Sum64()
 }

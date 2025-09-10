@@ -103,28 +103,29 @@ type cacheEntry struct {
 
 type Index struct {
 	sync.RWMutex
-	ID                 string
-	TotalDocs          int
-	AvgDocLength       float64
-	MemoryCapacity     int
-	NumWorkers         int
-	FieldsToIndex      []string
-	IndexFieldsExcept  []string
-	defaultSortField   *SortField
-	index              map[string][]Posting
-	docLength          map[int64]int
-	documents          *BPTree[int64, GenericRecord]
-	order              int
-	storage            string
-	indexingInProgress bool
-	searchCache        map[string]cacheEntry
-	cacheExpiry        time.Duration
-	reset              bool
-	addDocChan         chan GenericRecord // new channel for individual document additions
-	Distributed        bool
-	Peers              []string
-	DocIDField         string        // enhancement: allow custom doc ID field
-	closed             chan struct{} // enhancement: for graceful shutdown
+	ID                   string
+	TotalDocs            int
+	AvgDocLength         float64
+	MemoryCapacity       int
+	NumWorkers           int
+	FieldsToIndex        []string
+	IndexFieldsExcept    []string
+	defaultSortField     *SortField
+	index                map[string][]Posting
+	docLength            map[int64]int
+	documents            *BPTree[int64, GenericRecord]
+	order                int
+	storage              string
+	indexingInProgress   bool
+	searchCache          map[string]cacheEntry
+	searchCacheOptimized *OptimizedSearchCache // Optimized cache with uint64 keys
+	cacheExpiry          time.Duration
+	reset                bool
+	addDocChan           chan GenericRecord // new channel for individual document additions
+	Distributed          bool
+	Peers                []string
+	DocIDField           string        // enhancement: allow custom doc ID field
+	closed               chan struct{} // enhancement: for graceful shutdown
 }
 
 type DBConfig struct {
@@ -219,6 +220,82 @@ func WithDocIDField(field string) Options {
 	}
 }
 
+// Optimized search cache with uint64 keys for better performance
+type OptimizedSearchCache struct {
+	entries  map[uint64]cacheEntry
+	lru      []uint64
+	capacity int
+	mu       sync.RWMutex
+}
+
+// NewOptimizedSearchCache creates an optimized search cache
+func NewOptimizedSearchCache(capacity int) *OptimizedSearchCache {
+	// Reduce capacity for small datasets to minimize overhead
+	if capacity > 100 {
+		capacity = 100
+	}
+	return &OptimizedSearchCache{
+		entries:  make(map[uint64]cacheEntry, capacity),
+		lru:      make([]uint64, 0, capacity),
+		capacity: capacity,
+	}
+}
+
+// Get retrieves from cache using uint64 key
+func (osc *OptimizedSearchCache) Get(key uint64) ([]ScoredDoc, bool) {
+	osc.mu.RLock()
+	entry, exists := osc.entries[key]
+	osc.mu.RUnlock()
+
+	if !exists || time.Now().After(entry.expiry) {
+		return nil, false
+	}
+
+	// Simple LRU update - just move to end (more efficient than full reorder)
+	osc.mu.Lock()
+	osc.moveToFront(key)
+	osc.mu.Unlock()
+
+	return entry.data, true
+}
+
+// Put stores in cache with uint64 key
+func (osc *OptimizedSearchCache) Put(key uint64, value []ScoredDoc, expiry time.Time) {
+	osc.mu.Lock()
+	defer osc.mu.Unlock()
+
+	if len(osc.entries) >= osc.capacity {
+		osc.evictLRU()
+	}
+
+	osc.entries[key] = cacheEntry{data: value, expiry: expiry}
+	osc.lru = append(osc.lru, key)
+}
+
+// moveToFront moves key to front of LRU list (simplified)
+func (osc *OptimizedSearchCache) moveToFront(key uint64) {
+	// Find the key and move it to the end (most recently used)
+	for i, k := range osc.lru {
+		if k == key {
+			// Move to end by removing and re-adding
+			copy(osc.lru[i:], osc.lru[i+1:])
+			osc.lru[len(osc.lru)-1] = key
+			break
+		}
+	}
+}
+
+// evictLRU removes least recently used entry
+func (osc *OptimizedSearchCache) evictLRU() {
+	if len(osc.lru) == 0 {
+		return
+	}
+
+	lruKey := osc.lru[0]
+	delete(osc.entries, lruKey)
+	osc.lru = osc.lru[1:]
+}
+
 var scoredDocPool = sync.Pool{
 	New: func() any {
 		// Preallocate a slice with some capacity for scoring
@@ -240,16 +317,17 @@ func NewIndex(id string, opts ...Options) *Index {
 	os.MkdirAll(DefaultPath, 0755)
 	storagePath := filepath.Join(DefaultPath, "storage-"+id+".dat")
 	index := &Index{
-		ID:             id,
-		NumWorkers:     runtime.NumCPU(), // maximize parallelism
-		index:          make(map[string][]Posting),
-		docLength:      make(map[int64]int),
-		order:          3,
-		storage:        storagePath,
-		MemoryCapacity: 1000,
-		searchCache:    make(map[string]cacheEntry),
-		cacheExpiry:    time.Minute,
-		closed:         make(chan struct{}),
+		ID:                   id,
+		NumWorkers:           runtime.NumCPU(), // maximize parallelism
+		index:                make(map[string][]Posting),
+		docLength:            make(map[int64]int),
+		order:                3,
+		storage:              storagePath,
+		MemoryCapacity:       1000,
+		searchCache:          make(map[string]cacheEntry),
+		searchCacheOptimized: NewOptimizedSearchCache(1000), // Initialize optimized cache
+		cacheExpiry:          time.Minute,
+		closed:               make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(index)
@@ -1013,6 +1091,303 @@ func (index *Index) SearchScoreDocs(ctx context.Context, req Request) (Page, err
 		index.Unlock()
 	}
 	return smartPaginate(scored, page, perPage), nil
+}
+
+// SearchScoreDocsOptimized provides optimized search with better performance
+func (index *Index) SearchScoreDocsOptimized(ctx context.Context, req Request) (Page, error) {
+	if index.indexingInProgress {
+		return Page{}, fmt.Errorf("indexing in progress; please try again later")
+	}
+
+	req.Match = "AND"
+	if strings.ToLower(req.Match) == "any" {
+		req.Match = "OR"
+	}
+
+	sortField := SortField{Field: req.SortField}
+	if strings.ToLower(req.SortOrder) == "desc" {
+		sortField.Descending = true
+	}
+
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.Size <= 0 {
+		req.Size = 10
+	}
+
+	// Ultra-fast path for simple queries with no filters
+	if req.Query != "" && len(req.Filters) == 0 && !req.Fuzzy && req.SearchType == "" {
+		return index.searchUltraFast(ctx, req, sortField)
+	}
+
+	// Build query first to determine if optimization is worthwhile
+	var query Query
+	if len(req.Filters) > 0 {
+		var fil []filters.Condition
+		for _, f := range req.Filters {
+			fil = append(fil, &filters.Filter{
+				Field:    f.Field,
+				Operator: f.Operator,
+				Value:    f.Value,
+				Reverse:  f.Reverse,
+				Lookup:   f.Lookup,
+			})
+		}
+		query = NewFilterQuery(nil, filters.Boolean(req.Match), req.Reverse, fil...)
+	}
+
+	if req.Query != "" {
+		var q Query
+		useFuzzy := req.Fuzzy || req.SearchType == "fuzzy"
+		threshold := req.FuzzyThreshold
+		if threshold <= 0 {
+			threshold = 2
+		}
+
+		switch req.SearchType {
+		case "phrase":
+			q = NewPhraseQuery(req.Query, useFuzzy, threshold)
+		case "exact":
+			q = NewTermQuery(req.Query, false, 0)
+		case "fuzzy":
+			fallthrough
+		default:
+			if strings.Contains(req.Query, " ") {
+				q = NewPhraseQuery(req.Query, true, threshold)
+			} else {
+				q = NewTermQuery(req.Query, true, threshold)
+			}
+		}
+
+		switch qry := query.(type) {
+		case *FilterQuery:
+			qry.Term = q
+			query = qry
+		case FilterQuery:
+			qry.Term = q
+			query = qry
+		case nil:
+			query = q
+		}
+	}
+
+	if query == nil {
+		return smartPaginate(nil, req.Page, req.Size), nil
+	}
+
+	// Quick evaluation to determine optimization strategy
+	docIDs := query.Evaluate(index)
+
+	// For very small result sets, use the original simple approach
+	if len(docIDs) <= 20 {
+		return index.searchSimple(ctx, req, query, docIDs, sortField)
+	}
+
+	// For larger result sets, use optimized approach
+	return index.searchOptimized(ctx, req, query, docIDs, sortField)
+}
+
+// searchSimple provides the original simple search for small result sets
+func (index *Index) searchSimple(ctx context.Context, req Request, query Query, docIDs []int64, sortField SortField) (Page, error) {
+	if len(docIDs) == 0 {
+		return smartPaginate(nil, req.Page, req.Size), nil
+	}
+
+	// Use simple scoring without complex optimizations
+	queryTokens := query.Tokens()
+	scored := make([]ScoredDoc, 0, len(docIDs))
+
+	for _, docID := range docIDs {
+		score := index.bm25Score(queryTokens, docID, 1.2, 0.75)
+		scored = append(scored, ScoredDoc{DocID: docID, Score: score})
+	}
+
+	// Simple sort
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].Score > scored[j].Score
+	})
+
+	return smartPaginate(scored, req.Page, req.Size), nil
+}
+
+// searchOptimized provides the full optimized search for larger result sets
+func (index *Index) searchOptimized(ctx context.Context, req Request, query Query, docIDs []int64, sortField SortField) (Page, error) {
+	// Adaptive caching: only cache if we have enough results to justify the overhead
+	useCache := len(docIDs) > 10 // Only cache for queries with > 10 results
+
+	var queryHash uint64
+	if useCache {
+		// Use optimized query hash for caching
+		var filterInterfaces []interface{}
+		for _, f := range req.Filters {
+			filterInterfaces = append(filterInterfaces, f)
+		}
+		queryHash = FastQueryHash(req.Query, req.Page, req.Size, filterInterfaces)
+
+		// Try optimized cache first
+		if cached, found := index.searchCacheOptimized.Get(queryHash); found {
+			if len(sortField.Field) > 0 {
+				index.sortData(cached, []SortField{sortField})
+			} else {
+				sort.Slice(cached, func(i, j int) bool {
+					return cached[i].Score > cached[j].Score
+				})
+			}
+			return smartPaginate(cached, req.Page, req.Size), nil
+		}
+	}
+
+	if len(docIDs) == 0 {
+		return smartPaginate(nil, req.Page, req.Size), nil
+	}
+
+	// Adaptive parallel processing: only use multiple workers for larger result sets
+	numWorkers := 1 // Default to single worker
+	if len(docIDs) > 50 {
+		numWorkers = index.NumWorkers
+	} else if len(docIDs) > 20 {
+		numWorkers = 2 // Use 2 workers for medium result sets
+	}
+
+	// Use optimized BM25 scorer
+	obm25 := NewOptimizedBM25(1.2, 0.75)
+	queryTokens := query.Tokens()
+
+	// Parallel scoring with adaptive worker pool
+	ch := make(chan int64, len(docIDs))
+	for _, id := range docIDs {
+		ch <- id
+	}
+	close(ch)
+
+	scoredPtr := scoredDocPool.Get().(*[]ScoredDoc)
+	scored := *scoredPtr
+	scored = scored[:0]
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			localScored := make([]ScoredDoc, 0, 256)
+			for docID := range ch {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				docLength := float64(index.docLength[docID])
+				score := obm25.ScoreOptimized(index, queryTokens, docID, docLength)
+				localScored = append(localScored, ScoredDoc{DocID: docID, Score: score})
+			}
+			if len(localScored) > 0 {
+				mu.Lock()
+				scored = append(scored, localScored...)
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	*scoredPtr = scored[:0]
+	scoredDocPool.Put(scoredPtr)
+
+	// Sort results
+	if len(sortField.Field) > 0 {
+		index.sortData(scored, []SortField{sortField})
+	} else {
+		sort.Slice(scored, func(i, j int) bool {
+			return scored[i].Score > scored[j].Score
+		})
+	}
+
+	// Only cache if worthwhile
+	if useCache && len(scored) > 0 {
+		index.Lock()
+		index.searchCacheOptimized.Put(queryHash, scored, time.Now().Add(index.cacheExpiry))
+		index.Unlock()
+	}
+
+	return smartPaginate(scored, req.Page, req.Size), nil
+}
+
+// searchUltraFast provides ultra-fast search for simple queries
+func (index *Index) searchUltraFast(ctx context.Context, req Request, sortField SortField) (Page, error) {
+	// Direct tokenization without query object overhead
+	queryTokens := strings.Fields(strings.ToLower(req.Query))
+	if len(queryTokens) == 0 {
+		return smartPaginate(nil, req.Page, req.Size), nil
+	}
+
+	// For single token queries, direct lookup
+	if len(queryTokens) == 1 {
+		token := queryTokens[0]
+		postings, exists := index.index[token]
+		if !exists {
+			return smartPaginate(nil, req.Page, req.Size), nil
+		}
+
+		// Simple scoring without complex BM25
+		scored := make([]ScoredDoc, 0, len(postings))
+		for _, posting := range postings {
+			score := float64(posting.Frequency) // Simple term frequency scoring
+			scored = append(scored, ScoredDoc{DocID: posting.DocID, Score: score})
+		}
+
+		// Simple sort
+		sort.Slice(scored, func(i, j int) bool {
+			return scored[i].Score > scored[j].Score
+		})
+
+		return smartPaginate(scored, req.Page, req.Size), nil
+	}
+
+	// For multi-token queries, use intersection
+	docSets := make([][]int64, len(queryTokens))
+	totalDocs := 0
+
+	for i, token := range queryTokens {
+		if postings, exists := index.index[token]; exists {
+			docSet := make([]int64, len(postings))
+			for j, posting := range postings {
+				docSet[j] = posting.DocID
+			}
+			docSets[i] = docSet
+			totalDocs += len(postings)
+		} else {
+			// If any token doesn't exist, no results
+			return smartPaginate(nil, req.Page, req.Size), nil
+		}
+	}
+
+	// Simple intersection for AND logic
+	if len(docSets) == 0 {
+		return smartPaginate(nil, req.Page, req.Size), nil
+	}
+
+	result := docSets[0]
+	for i := 1; i < len(docSets); i++ {
+		result = intersectSorted(result, docSets[i])
+		if len(result) == 0 {
+			break
+		}
+	}
+
+	if len(result) == 0 {
+		return smartPaginate(nil, req.Page, req.Size), nil
+	}
+
+	// Simple scoring
+	scored := make([]ScoredDoc, 0, len(result))
+	for _, docID := range result {
+		score := 1.0 // Simple scoring for multi-token
+		scored = append(scored, ScoredDoc{DocID: docID, Score: score})
+	}
+
+	return smartPaginate(scored, req.Page, req.Size), nil
 }
 
 func (index *Index) sortData(scored []ScoredDoc, fields []SortField) {
