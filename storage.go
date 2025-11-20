@@ -403,6 +403,7 @@ func NewIndexPersistence(basePath string) *IndexPersistence {
 // SaveIndex saves the complete index state to disk
 func (p *IndexPersistence) SaveIndex(index *Index) error {
 	index.RLock()
+	snapshot := index.snapshotPostings()
 	defer index.RUnlock()
 
 	// Create directory if it doesn't exist
@@ -411,7 +412,7 @@ func (p *IndexPersistence) SaveIndex(index *Index) error {
 	}
 
 	// Save inverted index
-	if err := p.saveInvertedIndex(index.index); err != nil {
+	if err := p.saveInvertedIndex(snapshot); err != nil {
 		return fmt.Errorf("failed to save inverted index: %v", err)
 	}
 
@@ -444,7 +445,10 @@ func (p *IndexPersistence) LoadIndex(index *Index) error {
 	if err != nil {
 		return fmt.Errorf("failed to load inverted index: %v", err)
 	}
-	index.index = invertedIndex
+	index.postings = newPostingStore()
+	for term, postings := range invertedIndex {
+		index.replacePostings(term, postings)
+	}
 
 	// Load document lengths
 	docLengths, err := p.loadDocLengths()

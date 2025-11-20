@@ -264,7 +264,7 @@ func (m *Manager) ListIndexes() map[string]*IndexStats {
 	for name, stats := range m.indexStats {
 		if index, exists := m.indexes[name]; exists {
 			stats.DocumentCount = index.TotalDocs
-			stats.TermCount = len(index.Index.index)
+			stats.TermCount = index.Index.termCount()
 		}
 		result[name] = stats
 	}
@@ -448,7 +448,7 @@ func (m *Manager) StartAdvancedHTTPServer(addr string) {
 	http.HandleFunc("/api/indexes", m.handleIndexes)
 	http.HandleFunc("/api/index/create", m.handleCreateIndex)
 	http.HandleFunc("/api/index/", m.handleIndexOperations)
-	http.HandleFunc("/api/search/", m.handleSearch)
+	http.HandleFunc("/api/search/{index}", m.handleSearch)
 	http.HandleFunc("/api/metrics", m.handleMetrics)
 
 	log.Printf("Enhanced HTTP server listening on http://%s", addr)
@@ -555,14 +555,8 @@ func (m *Manager) handleIndexOperations(w http.ResponseWriter, r *http.Request) 
 }
 
 func (m *Manager) handleSearch(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Extract index name from path
-	path := r.URL.Path[len("/api/search/"):]
-	if path == "" {
+	indexName := r.PathValue("index")
+	if indexName == "" {
 		http.Error(w, "Index name required", http.StatusBadRequest)
 		return
 	}
@@ -601,8 +595,7 @@ func (m *Manager) handleSearch(w http.ResponseWriter, r *http.Request) {
 		FuzzyThreshold: fuzzyThreshold,
 		Exact:          searchType == "exact",
 	}
-
-	result, err := m.Search(r.Context(), path, req)
+	result, err := m.Search(r.Context(), indexName, req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -838,7 +831,10 @@ func (m *Manager) createDocument(w http.ResponseWriter, r *http.Request, index *
 	}
 
 	// Add the document to the index
-	index.AddDocument(document)
+	if err := index.AddDocument(document); err != nil {
+		http.Error(w, "Failed to add document: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

@@ -63,9 +63,10 @@ func (ei *EnhancedIndex) BuildAutoComplete() {
 	ei.RLock()
 	defer ei.RUnlock()
 
-	for term := range ei.index {
+	ei.rangePostings(func(term string, _ []Posting) bool {
 		ei.insertToTrie(term)
-	}
+		return true
+	})
 }
 
 // insertToTrie inserts a term into the autocomplete trie
@@ -126,14 +127,15 @@ func (ei *EnhancedIndex) getTermFrequency(term string) int {
 	ei.RLock()
 	defer ei.RUnlock()
 
-	if postings, ok := ei.index[term]; ok {
-		totalFreq := 0
-		for _, posting := range postings {
-			totalFreq += posting.Frequency
-		}
-		return totalFreq
+	postings := ei.getPostings(term)
+	if len(postings) == 0 {
+		return 0
 	}
-	return 0
+	totalFreq := 0
+	for _, posting := range postings {
+		totalFreq += posting.Frequency
+	}
+	return totalFreq
 }
 
 // SearchWithHighlights performs search and returns results with highlighted terms
@@ -315,7 +317,7 @@ func (ei *EnhancedIndex) IndexHealthCheck() map[string]interface{} {
 	health := map[string]interface{}{
 		"status":            "healthy",
 		"total_documents":   ei.TotalDocs,
-		"total_terms":       len(ei.index),
+		"total_terms":       ei.termCount(),
 		"avg_doc_length":    ei.AvgDocLength,
 		"indexing_progress": ei.indexingInProgress,
 		"cache_size":        len(ei.searchCache),
@@ -330,7 +332,7 @@ func (ei *EnhancedIndex) IndexHealthCheck() map[string]interface{} {
 		health["status"] = "warning"
 	}
 
-	if len(ei.index) == 0 {
+	if ei.termCount() == 0 {
 		issues = append(issues, "empty_inverted_index")
 		health["status"] = "error"
 	}
@@ -360,20 +362,15 @@ func (ei *EnhancedIndex) Optimize() error {
 	defer ei.Index.Unlock()
 
 	// 1. Compress posting lists and remove empty entries
-	for term, postings := range ei.Index.index {
+	ei.Index.rangePostings(func(term string, postings []Posting) bool {
 		originalTerms++
-
 		if len(postings) == 0 {
-			delete(ei.Index.index, term)
-			continue
+			ei.Index.deletePostings(term)
+			return true
 		}
-
-		// Sort postings by document ID for better compression
 		sort.Slice(postings, func(i, j int) bool {
 			return postings[i].DocID < postings[j].DocID
 		})
-
-		// Remove duplicate entries
 		uniquePostings := make([]Posting, 0, len(postings))
 		var lastDocID int64 = -1
 		for _, posting := range postings {
@@ -382,10 +379,14 @@ func (ei *EnhancedIndex) Optimize() error {
 				lastDocID = posting.DocID
 			}
 		}
-
-		ei.Index.index[term] = uniquePostings
+		if len(uniquePostings) == 0 {
+			ei.Index.deletePostings(term)
+			return true
+		}
+		ei.Index.replacePostings(term, uniquePostings)
 		optimizedTerms++
-	}
+		return true
+	})
 
 	// 2. Clean up document storage - count valid documents
 	validDocCount := 0
@@ -494,21 +495,20 @@ func (ei *EnhancedIndex) removeDocumentFromIndex(docID int64, doc GenericRecord)
 
 	// Remove document from each term's posting list
 	for _, term := range terms {
-		if postings, exists := ei.index[term]; exists {
-			// Filter out postings for this document
-			newPostings := make([]Posting, 0, len(postings))
-			for _, posting := range postings {
-				if posting.DocID != docID {
-					newPostings = append(newPostings, posting)
-				}
+		postings := ei.getPostings(term)
+		if len(postings) == 0 {
+			continue
+		}
+		newPostings := make([]Posting, 0, len(postings))
+		for _, posting := range postings {
+			if posting.DocID != docID {
+				newPostings = append(newPostings, posting)
 			}
-
-			if len(newPostings) == 0 {
-				// Remove term entirely if no postings left
-				delete(ei.index, term)
-			} else {
-				ei.index[term] = newPostings
-			}
+		}
+		if len(newPostings) == 0 {
+			ei.deletePostings(term)
+		} else {
+			ei.replacePostings(term, newPostings)
 		}
 	}
 }
@@ -526,11 +526,8 @@ func (ei *EnhancedIndex) addDocumentToIndex(docID int64, doc GenericRecord) {
 
 	// Add to inverted index
 	for term, freq := range termFreq {
-		posting := Posting{
-			DocID:     docID,
-			Frequency: freq,
-		}
-		ei.index[term] = append(ei.index[term], posting)
+		posting := Posting{DocID: docID, Frequency: freq}
+		ei.appendPostings(term, []Posting{posting})
 	}
 
 	// Update document length

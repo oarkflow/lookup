@@ -227,7 +227,9 @@ func mainOriginal() {
 		"rating":   4.0,
 	}
 
-	index.AddDocument(newDoc)
+	if err := index.AddDocument(newDoc); err != nil {
+		log.Printf("failed to add new document: %v", err)
+	}
 
 	// Wait a moment for the document to be processed
 	time.Sleep(100 * time.Millisecond)

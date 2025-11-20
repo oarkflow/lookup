@@ -1,4 +1,22 @@
-const apiBase = "";
+const apiBase = "/api";
+let indexStats = {};
+
+async function fetchJSON(url, options = {}) {
+    const response = await fetch(url, options);
+    if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(body || `${response.status} ${response.statusText}`);
+    }
+    const text = await response.text();
+    if (!text) {
+        return null;
+    }
+    try {
+        return JSON.parse(text);
+    } catch (err) {
+        throw new Error("Failed to parse JSON response");
+    }
+}
 
 // Tab logic for main content
 function showMainTab(tab) {
@@ -56,42 +74,86 @@ document.getElementById("add-filter").onclick = function () {
     }
 };
 
-function fetchIndexes() {
-    fetch(apiBase + "/indexes")
-        .then(res => res.json())
-        .then(indexes => {
-            // Sidebar list
-            const list = document.getElementById("indexes-list");
-            list.innerHTML = "";
-            indexes.forEach(idx => {
+async function fetchIndexes() {
+    try {
+        const stats = await fetchJSON(`${apiBase}/indexes`);
+        indexStats = stats || {};
+        const names = Object.keys(indexStats).sort();
+
+        const list = document.getElementById("indexes-list");
+        list.innerHTML = "";
+        if (names.length === 0) {
+            const li = document.createElement("li");
+            li.textContent = "No indexes yet";
+            list.appendChild(li);
+        } else {
+            names.forEach(idx => {
                 const li = document.createElement("li");
                 li.textContent = idx;
                 li.onclick = () => {
-                    // Switch to search tab and select this index
                     showMainTab("search");
                     document.getElementById("search-index").value = idx;
+                    renderIndexStats(idx);
                 };
                 list.appendChild(li);
             });
-            // Update selects for all upload/search forms
-            [
-                "search-index",
-                "upload-index",
-                "upload-index-url",
-                "upload-index-paste",
-                "upload-index-db"
-            ].forEach(id => {
-                const sel = document.getElementById(id);
-                if (!sel) return;
-                sel.innerHTML = "";
-                indexes.forEach(idx => {
-                    const opt = document.createElement("option");
-                    opt.value = idx;
-                    opt.textContent = idx;
-                    sel.appendChild(opt);
-                });
+        }
+
+        const selectIds = [
+            "search-index",
+            "upload-index",
+            "upload-index-url",
+            "upload-index-paste",
+            "upload-index-db"
+        ];
+        selectIds.forEach(id => {
+            const sel = document.getElementById(id);
+            if (!sel) {
+                return;
+            }
+            sel.innerHTML = "";
+            names.forEach(idx => {
+                const opt = document.createElement("option");
+                opt.value = idx;
+                opt.textContent = idx;
+                sel.appendChild(opt);
             });
         });
+
+        if (names.length > 0) {
+            renderIndexStats(names[0]);
+        } else {
+            renderIndexStats(null);
+        }
+    } catch (err) {
+        console.error("Failed to load indexes", err);
+        const list = document.getElementById("indexes-list");
+        list.innerHTML = `<li class="text-red-600">Error: ${err.message}</li>`;
+        renderIndexStats(null);
+    }
+}
+
+function renderIndexStats(indexName) {
+    const statsPanel = document.getElementById("index-stats");
+    if (!statsPanel) {
+        return;
+    }
+    if (!indexName || !indexStats[indexName]) {
+        statsPanel.innerHTML = "<em>No index selected</em>";
+        return;
+    }
+    const stats = indexStats[indexName];
+    const totalDocs = stats?.document_count ?? stats?.DocumentCount ?? 0;
+    const totalTerms = stats?.term_count ?? stats?.TermCount ?? 0;
+    const avgLatency = stats?.average_latency ?? stats?.AverageLatency ?? "-";
+    const totalQueries = stats?.total_queries ?? stats?.TotalQueries ?? 0;
+    statsPanel.innerHTML = `
+        <div><strong>${indexName}</strong></div>
+        <div>Total documents: ${totalDocs}</div>
+        <div>Indexed terms: ${totalTerms}</div>
+        <div>Total queries: ${totalQueries}</div>
+        <div>Avg. latency: ${avgLatency}</div>
+    `;
 }
 
 document.getElementById("refresh-indexes").onclick = fetchIndexes;
@@ -101,33 +163,41 @@ window.onload = () => {
 };
 
 // Add Index
-document.getElementById("add-index-form").onsubmit = function (e) {
+document.getElementById("add-index-form").onsubmit = async function (e) {
     e.preventDefault();
     const id = document.getElementById("index-id").value.trim();
-    const docIdField = document.getElementById("doc-id-field").value.trim();
-    const fields = document.getElementById("fields").value.trim();
-    const except = document.getElementById("except").value.trim();
-    const workers = parseInt(document.getElementById("workers").value, 10) || undefined;
-    const cache = parseInt(document.getElementById("cache").value, 10) || undefined;
-    const payload = {
-        id,
-        doc_id_field: docIdField,
-        fields: fields ? fields.split(",").map(f => f.trim()) : [],
-        except: except ? except.split(",").map(f => f.trim()) : [],
-        workers,
-        cache
-    };
-    fetch(apiBase + "/index/add", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-    })
-        .then(res => res.text())
-        .then(msg => {
-            document.getElementById("add-index-result").textContent = msg;
-            fetchIndexes();
-        });
+    if (!id) {
+        document.getElementById("add-index-result").textContent = "Index ID is required";
+        return;
+    }
+
+    try {
+        const params = new URLSearchParams({ name: id });
+        await fetchJSON(`${apiBase}/index/create?${params.toString()}`, { method: "POST" });
+        document.getElementById("add-index-result").textContent = `Index '${id}' created`;
+        document.getElementById("index-id").value = "";
+        fetchIndexes();
+    } catch (err) {
+        document.getElementById("add-index-result").textContent = `Error: ${err.message}`;
+    }
 };
+
+async function ingestRecords(index, records) {
+    const payload = Array.isArray(records) ? records : [records];
+    let count = 0;
+    for (const record of payload) {
+        if (!record || typeof record !== "object") {
+            continue;
+        }
+        await fetchJSON(`${apiBase}/index/${encodeURIComponent(index)}/document`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(record)
+        });
+        count++;
+    }
+    return count;
+}
 
 // Upload from file
 document.getElementById("upload-form-file").onsubmit = function (e) {
@@ -138,16 +208,18 @@ document.getElementById("upload-form-file").onsubmit = function (e) {
     const file = fileInput.files[0];
     const reader = new FileReader();
     reader.onload = function (evt) {
-        const data = evt.target.result;
-        fetch(`${apiBase}/${index}/build`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: data
-        })
-            .then(res => res.text())
-            .then(msg => {
-                document.getElementById("upload-result").textContent = msg;
-            });
+        try {
+            const parsed = JSON.parse(evt.target.result);
+            ingestRecords(index, parsed)
+                .then(count => {
+                    document.getElementById("upload-result").textContent = `Uploaded ${count} records`;
+                })
+                .catch(err => {
+                    document.getElementById("upload-result").textContent = `Upload failed: ${err.message}`;
+                });
+        } catch (err) {
+            document.getElementById("upload-result").textContent = `Invalid JSON: ${err.message}`;
+        }
     };
     reader.readAsText(file);
 };
@@ -161,15 +233,18 @@ document.getElementById("upload-form-url").onsubmit = function (e) {
     fetch(url)
         .then(res => res.text())
         .then(data => {
-            fetch(`${apiBase}/${index}/build`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: data
-            })
-                .then(res => res.text())
-                .then(msg => {
-                    document.getElementById("upload-result").textContent = msg;
-                });
+            try {
+                const parsed = JSON.parse(data);
+                ingestRecords(index, parsed)
+                    .then(count => {
+                        document.getElementById("upload-result").textContent = `Uploaded ${count} records`;
+                    })
+                    .catch(err => {
+                        document.getElementById("upload-result").textContent = `Upload failed: ${err.message}`;
+                    });
+            } catch (err) {
+                document.getElementById("upload-result").textContent = `Invalid JSON: ${err.message}`;
+            }
         })
         .catch(err => {
             document.getElementById("upload-result").textContent = "Failed to fetch URL: " + err;
@@ -182,83 +257,89 @@ document.getElementById("upload-form-paste").onsubmit = function (e) {
     const index = document.getElementById("upload-index-paste").value;
     const data = document.getElementById("upload-paste").value.trim();
     if (!data) return;
-    fetch(`${apiBase}/${index}/build`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: data
-    })
-        .then(res => res.text())
-        .then(msg => {
-            document.getElementById("upload-result").textContent = msg;
-        });
+    try {
+        const parsed = JSON.parse(data);
+        ingestRecords(index, parsed)
+            .then(count => {
+                document.getElementById("upload-result").textContent = `Uploaded ${count} records`;
+            })
+            .catch(err => {
+                document.getElementById("upload-result").textContent = `Upload failed: ${err.message}`;
+            });
+    } catch (err) {
+        document.getElementById("upload-result").textContent = `Invalid JSON: ${err.message}`;
+    }
 };
 
 // Upload from database
 document.getElementById("upload-form-db").onsubmit = function (e) {
     e.preventDefault();
-    const index = document.getElementById("upload-index-db").value;
-    const dbType = document.getElementById("db-type").value.trim();
-    const dbHost = document.getElementById("db-host").value.trim();
-    const dbPort = parseInt(document.getElementById("db-port").value, 10);
-    const dbUser = document.getElementById("db-user").value.trim();
-    const dbPassword = document.getElementById("db-password").value;
-    const dbName = document.getElementById("db-name").value.trim();
-    const dbQuery = document.getElementById("db-query").value.trim();
-    const payload = {
-        database: {
-            type: dbType,
-            host: dbHost,
-            port: dbPort,
-            user: dbUser,
-            password: dbPassword,
-            database: dbName,
-            query: dbQuery
-        }
-    };
-    fetch(`${apiBase}/${index}/build`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-    })
-        .then(res => res.text())
-        .then(msg => {
-            document.getElementById("upload-result").textContent = msg;
-        });
+    document.getElementById("upload-result").textContent = "Database ingestion is not yet supported in this interface.";
 };
 
 // Search
-document.getElementById("search-form").onsubmit = function (e) {
+document.getElementById("search-form").onsubmit = async function (e) {
     e.preventDefault();
     const index = document.getElementById("search-index").value;
-    const query = document.getElementById("search-query").value;
+    const query = document.getElementById("search-query").value.trim();
     const page = parseInt(document.getElementById("search-page").value, 10) || 1;
     const size = parseInt(document.getElementById("search-size").value, 10) || 10;
-    const req = { q: query, p: page, s: size, filters };
-    fetch(`${apiBase}/${index}/search`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(req)
-    })
-        .then(res => res.json())
-        .then(data => {
-            renderResults(data);
+    const searchType = document.getElementById("search-type")?.value || "fuzzy";
+    const fuzzyThreshold = parseInt(document.getElementById("fuzzy-threshold")?.value, 10) || 2;
+
+    if (!index) {
+        document.getElementById("search-result").innerHTML = "<em>Select an index first</em>";
+        return;
+    }
+    if (!query) {
+        document.getElementById("search-result").innerHTML = "<em>Enter a query</em>";
+        return;
+    }
+
+    try {
+        const params = new URLSearchParams({
+            q: query,
+            page: String(page),
+            size: String(size),
+            search_type: searchType,
+            fuzzy_threshold: String(fuzzyThreshold)
         });
+        if (filters.length > 0) {
+            params.set("filters", JSON.stringify(filters));
+        }
+        const data = await fetchJSON(`${apiBase}/search/${encodeURIComponent(index)}?${params.toString()}`);
+        renderResults(data);
+        renderIndexStats(index);
+    } catch (err) {
+        document.getElementById("search-result").innerHTML = `<em>Error: ${err.message}</em>`;
+    }
 };
 
 function renderResults(data) {
     const el = document.getElementById("search-result");
-    if (!data || !data.items) {
+    if (!data) {
         el.innerHTML = "<em>No results</em>";
         return;
     }
-    let html = `<div style="margin-bottom:5px;"><b>Total:</b> ${data.total} | <b>Page:</b> ${data.page}/${data.total_pages}, <b>Time Take</b>:${data.latency}</div>`;
+    const items = data.items || data.Items || [];
+    const total = data.total ?? data.Total ?? items.length;
+    let html = `<div style="margin-bottom:5px;"><b>Total:</b> ${total}`;
+    if (typeof data.page !== "undefined" || typeof data.Page !== "undefined") {
+        const page = data.page ?? data.Page;
+        const totalPages = data.total_pages ?? data.TotalPages ?? 1;
+        html += ` | <b>Page:</b> ${page}/${totalPages}`;
+    }
+    if (typeof data.latency !== "undefined") {
+        html += ` | <b>Latency:</b> ${data.latency}`;
+    }
+    html += "</div>";
     html += "<table><thead><tr>";
-    if (data.items.length > 0) {
-        Object.keys(data.items[0]).forEach(k => {
+    if (items.length > 0) {
+        Object.keys(items[0]).forEach(k => {
             html += `<th class="px-3 py-1">${k}</th>`;
         });
         html += "</tr></thead><tbody>";
-        data.items.forEach(row => {
+        items.forEach(row => {
             html += "<tr>";
             Object.values(row).forEach(val => {
                 html += `<td class="px-6 py-2">${escapeHtml(val)}</td>`;

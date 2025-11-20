@@ -374,11 +374,13 @@ err := index.Build(ctx, data)
 
 ```go
 // Add single document
-index.AddDocument(lookup.GenericRecord{
+if err := index.AddDocument(lookup.GenericRecord{
     "id": 123,
     "title": "New Document",
     "content": "Fresh content",
-})
+}); err != nil {
+    log.Fatal(err)
+}
 
 // Update document
 err := index.UpdateDocument(123, lookup.GenericRecord{

@@ -134,6 +134,33 @@ func main() {
 			"publishDate": "2024-03-10",
 			"rating":      4.7,
 		},
+		{
+			"id":          4,
+			"title":       "Practical Natural Language Processing",
+			"content":     "Step-by-step NLP projects covering transformers, embeddings, and production deployment",
+			"category":    "Technology",
+			"author":      "Priya Patel",
+			"publishDate": "2024-04-22",
+			"rating":      4.9,
+		},
+		{
+			"id":          5,
+			"title":       "Edge Computing Architecture Patterns",
+			"content":     "Design resilient edge services with streaming analytics and secure device management",
+			"category":    "Infrastructure",
+			"author":      "Luis Hernandez",
+			"publishDate": "2024-05-18",
+			"rating":      4.5,
+		},
+		{
+			"id":          6,
+			"title":       "Data Visualization for Decision Makers",
+			"content":     "Craft persuasive dashboards using real-time metrics and advanced storytelling techniques",
+			"category":    "Analytics",
+			"author":      "Emily Davis",
+			"publishDate": "2024-06-07",
+			"rating":      4.4,
+		},
 	}
 
 	productData := []lookup.GenericRecord{
@@ -153,6 +180,24 @@ func main() {
 			"category":    "Graphics",
 			"price":       1299.99,
 			"brand":       "GraphicsMax",
+			"inStock":     true,
+		},
+		{
+			"id":          103,
+			"name":        "QuantumReady Server Rack",
+			"description": "Modular rack with adaptive cooling, sensor telemetry, and 400Gb interconnects",
+			"category":    "Hardware",
+			"price":       8999.00,
+			"brand":       "InfraLabs",
+			"inStock":     false,
+		},
+		{
+			"id":          104,
+			"name":        "Neural Vision Drone",
+			"description": "Autonomous drone with edge AI object tracking and 8K HDR capture",
+			"category":    "Robotics",
+			"price":       2499.50,
+			"brand":       "SkySight",
 			"inStock":     true,
 		},
 	}
@@ -177,6 +222,26 @@ func main() {
 			"department": "Product",
 			"joinDate":   "2023-08-20",
 			"active":     true,
+		},
+		{
+			"id":         1003,
+			"username":   "maria_ops",
+			"email":      "maria.ops@example.com",
+			"fullName":   "Maria Gonzales",
+			"role":       "site-reliability",
+			"department": "Operations",
+			"joinDate":   "2022-11-03",
+			"active":     true,
+		},
+		{
+			"id":         1004,
+			"username":   "sam_research",
+			"email":      "sam.research@example.com",
+			"fullName":   "Samir Rahman",
+			"role":       "data-scientist",
+			"department": "Research",
+			"joinDate":   "2021-02-12",
+			"active":     false,
 		},
 	}
 
@@ -316,12 +381,12 @@ func main() {
 	log.Println("  - DELETE /api/index/<name> - Delete index")
 	log.Println("  - GET  /api/search/<index>?q=<query> - Search index")
 	log.Println("  - GET  /api/metrics - System metrics")
-	log.Println("\n🎯 Open http://localhost:8080/search-ui.html for the web interface")
+	log.Println("\n🎯 Open http://localhost:8081/search-ui.html for the web interface")
 
 	http.HandleFunc("/logs", handleWebSocketLogs)
 
 	// This will block and serve HTTP requests
-	manager.StartAdvancedHTTPServer(":8080")
+	manager.StartAdvancedHTTPServer("localhost:8081")
 }
 
 var upgrader = websocket.Upgrader{

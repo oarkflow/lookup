@@ -73,19 +73,6 @@ func (rec GenericRecord) String(fieldsToIndex []string, except []string) string 
 	return strings.Join(parts, " ")
 }
 
-func (rec GenericRecord) getFrequency(fieldsToIndex []string, except []string) map[string]int {
-	combined := utils.ToLower(rec.String(fieldsToIndex, except))
-	var tokens []string
-	// Example: switch to Unicode tokenization if needed
-	// tokens = utils.TokenizeUnicode(combined)
-	tokens = utils.Tokenize(combined)
-	freq := make(map[string]int, len(tokens))
-	for _, t := range tokens {
-		freq[t]++
-	}
-	return freq
-}
-
 type Posting struct {
 	DocID     int64
 	Frequency int
@@ -110,8 +97,10 @@ type Index struct {
 	NumWorkers           int
 	FieldsToIndex        []string
 	IndexFieldsExcept    []string
+	analyzer             Analyzer
+	fieldAnalyzers       map[string]Analyzer
 	defaultSortField     *SortField
-	index                map[string][]Posting
+	postings             PostingStore
 	docLength            map[int64]int
 	documents            *BPTree[int64, GenericRecord]
 	order                int
@@ -121,7 +110,7 @@ type Index struct {
 	searchCacheOptimized *OptimizedSearchCache // Optimized cache with uint64 keys
 	cacheExpiry          time.Duration
 	reset                bool
-	addDocChan           chan GenericRecord // new channel for individual document additions
+	addDocChan           chan Document // new channel for individual document additions
 	Distributed          bool
 	Peers                []string
 	DocIDField           string        // enhancement: allow custom doc ID field
@@ -165,6 +154,26 @@ func WithIndexFieldsExcept(except ...string) Options {
 	}
 }
 
+func WithAnalyzer(an Analyzer) Options {
+	return func(index *Index) {
+		if an != nil {
+			index.analyzer = an
+		}
+	}
+}
+
+func WithFieldAnalyzer(field string, analyzer Analyzer) Options {
+	return func(index *Index) {
+		if field == "" || analyzer == nil {
+			return
+		}
+		if index.fieldAnalyzers == nil {
+			index.fieldAnalyzers = make(map[string]Analyzer)
+		}
+		index.fieldAnalyzers[field] = analyzer
+	}
+}
+
 func WithDefaultSortField(field string, descending bool) Options {
 	return func(index *Index) {
 		index.defaultSortField = &SortField{Field: field, Descending: descending}
@@ -198,6 +207,13 @@ func WithReset(reset bool) Options {
 func WithCacheExpiry(dur time.Duration) Options {
 	return func(index *Index) {
 		index.cacheExpiry = dur
+	}
+}
+
+// WithCompressedPostings enables delta-compressed posting storage.
+func WithCompressedPostings() Options {
+	return func(index *Index) {
+		index.postings = newCompressedPostingStore()
 	}
 }
 
@@ -307,7 +323,7 @@ var scoredDocPool = sync.Pool{
 var batchPool = sync.Pool{
 	New: func() any {
 		// Preallocate a slice with some capacity for batching
-		b := make([]GenericRecord, 0, 1000)
+		b := make([]Document, 0, 1000)
 		return &b
 	},
 }
@@ -319,7 +335,6 @@ func NewIndex(id string, opts ...Options) *Index {
 	index := &Index{
 		ID:                   id,
 		NumWorkers:           runtime.NumCPU(), // maximize parallelism
-		index:                make(map[string][]Posting),
 		docLength:            make(map[int64]int),
 		order:                3,
 		storage:              storagePath,
@@ -328,15 +343,22 @@ func NewIndex(id string, opts ...Options) *Index {
 		searchCacheOptimized: NewOptimizedSearchCache(1000), // Initialize optimized cache
 		cacheExpiry:          time.Minute,
 		closed:               make(chan struct{}),
+		analyzer:             defaultAnalyzer,
 	}
 	for _, opt := range opts {
 		opt(index)
+	}
+	if index.postings == nil {
+		index.postings = newPostingStore()
+	}
+	if index.fieldAnalyzers == nil {
+		index.fieldAnalyzers = make(map[string]Analyzer)
 	}
 	if index.reset {
 		os.Remove(storagePath)
 	}
 	index.documents = NewBPTree[int64, GenericRecord](index.order, index.storage, index.MemoryCapacity)
-	index.addDocChan = make(chan GenericRecord, 10000) // larger buffer for high throughput
+	index.addDocChan = make(chan Document, 10000) // larger buffer for high throughput
 	go index.processAddDocLoop()
 	index.startCacheCleanup()
 	return index
@@ -353,18 +375,19 @@ func (index *Index) FuzzySearch(term string, threshold int) []string {
 	index.RLock()
 	defer index.RUnlock()
 	var results []string
-	for token := range index.index {
+	index.rangePostings(func(token string, _ []Posting) bool {
 		if utils.BoundedLevenshtein(term, token, threshold) <= threshold {
 			results = append(results, token)
 		}
-	}
+		return true
+	})
 	return results
 }
 
 // New helper function: processAddDocLoop batches individual docs
 func (index *Index) processAddDocLoop() {
 	flushThreshold := 1000 // larger batch for throughput
-	batchPtr := batchPool.Get().(*[]GenericRecord)
+	batchPtr := batchPool.Get().(*[]Document)
 	batch := *batchPtr
 	batch = batch[:0]
 	ticker := time.NewTicker(200 * time.Millisecond) // flush more frequently
@@ -374,14 +397,14 @@ func (index *Index) processAddDocLoop() {
 	}()
 	for {
 		select {
-		case rec, ok := <-index.addDocChan:
+		case doc, ok := <-index.addDocChan:
 			if !ok {
 				if len(batch) > 0 {
 					index.processBatch(batch)
 				}
 				return
 			}
-			batch = append(batch, rec)
+			batch = append(batch, doc)
 			if len(batch) >= flushThreshold {
 				index.processBatch(batch)
 				batch = batch[:0]
@@ -395,46 +418,164 @@ func (index *Index) processAddDocLoop() {
 	}
 }
 
-// Helper function to extract or generate docID
-func (index *Index) extractDocID(rec GenericRecord) int64 {
-	if index.DocIDField != "" {
-		if v, ok := rec[index.DocIDField]; ok {
-			if id, err := strconv.ParseInt(utils.ToString(v), 10, 64); err == nil {
-				return id
-			}
-		}
-	}
-	return utils.NewID().Int64()
-}
-
 // Helper function to merge a batch of documents
-func (index *Index) processBatch(recs []GenericRecord) {
+func (index *Index) processBatch(docs []Document) {
+	if len(docs) == 0 {
+		return
+	}
 	partial := partialIndex{
 		docs:     make(map[int64]GenericRecord),
 		lengths:  make(map[int64]int),
 		inverted: make(map[string][]Posting),
 	}
-	for _, rec := range recs {
-		docID := index.extractDocID(rec) // enhancement: use custom docID
-		freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
-		partial.docs[docID] = rec
+	for _, doc := range docs {
+		rec := doc.Data()
+		if rec == nil {
+			continue
+		}
+		docID := doc.ID()
+		freq := index.computeFrequencies(rec)
 		docLen := 0
 		for term, count := range freq {
 			partial.inverted[term] = append(partial.inverted[term], Posting{DocID: docID, Frequency: count})
 			docLen += count
 		}
 		partial.lengths[docID] = docLen
+		partial.docs[docID] = rec
 		partial.totalDocs++
 	}
 	index.mergePartial(partial)
 }
 
-// AddDocument that pushes docs to the channel for batching
-func (index *Index) AddDocument(rec GenericRecord) {
-	index.addDocChan <- rec
+// AddDocument ingests arbitrary values (GenericRecord, map, struct, string, etc.).
+func (index *Index) AddDocument(value any) error {
+	return index.AddDocumentContext(context.Background(), value)
+}
+
+// AddDocumentContext ingests a value with context cancellation.
+func (index *Index) AddDocumentContext(ctx context.Context, value any) error {
+	doc, err := index.adaptDocument(ctx, value)
+	if err != nil {
+		return err
+	}
+	select {
+	case index.addDocChan <- doc:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	if index.Distributed {
+		rec := cloneRecord(doc.Data())
 		go index.distributedAddDocument(rec)
 	}
+	return nil
+}
+
+func (index *Index) adaptDocument(ctx context.Context, value any) (Document, error) {
+	opts := []AdaptOption{WithDocumentIDField(index.DocIDField)}
+	return AdaptDocument(ctx, value, opts...)
+}
+
+func cloneRecord(src GenericRecord) GenericRecord {
+	if src == nil {
+		return nil
+	}
+	dup := make(GenericRecord, len(src))
+	for k, v := range src {
+		dup[k] = v
+	}
+	return dup
+}
+
+func (index *Index) appendPostings(term string, postings []Posting) {
+	if index.postings == nil || len(postings) == 0 {
+		return
+	}
+	index.postings.Append(term, postings)
+}
+
+func (index *Index) replacePostings(term string, postings []Posting) {
+	if index.postings == nil {
+		return
+	}
+	index.postings.Replace(term, postings)
+}
+
+func (index *Index) getPostings(term string) []Posting {
+	if index.postings == nil {
+		return nil
+	}
+	return index.postings.Get(term)
+}
+
+func (index *Index) deletePostings(term string) {
+	if index.postings == nil {
+		return
+	}
+	index.postings.Delete(term)
+}
+
+func (index *Index) rangePostings(fn func(term string, postings []Posting) bool) {
+	if index.postings == nil || fn == nil {
+		return
+	}
+	index.postings.Range(fn)
+}
+
+func (index *Index) snapshotPostings() map[string][]Posting {
+	if index.postings == nil {
+		return nil
+	}
+	return index.postings.Snapshot()
+}
+
+func (index *Index) termCount() int {
+	if index.postings == nil {
+		return 0
+	}
+	return index.postings.Len()
+}
+
+func (index *Index) computeFrequencies(rec GenericRecord) map[string]int {
+	freq := make(map[string]int)
+	if rec == nil {
+		return freq
+	}
+	for field, value := range rec {
+		if !index.shouldIndexField(field) {
+			continue
+		}
+		an := index.analyzerForField(field)
+		tokens := an.Analyze(field, value)
+		for _, tok := range tokens {
+			if tok.Term == "" || tok.Frequency == 0 {
+				continue
+			}
+			freq[tok.Term] += tok.Frequency
+		}
+	}
+	return freq
+}
+
+func (index *Index) shouldIndexField(field string) bool {
+	if len(index.FieldsToIndex) > 0 && !slices.Contains(index.FieldsToIndex, field) {
+		return false
+	}
+	if len(index.IndexFieldsExcept) > 0 && slices.Contains(index.IndexFieldsExcept, field) {
+		return false
+	}
+	return true
+}
+
+func (index *Index) analyzerForField(field string) Analyzer {
+	if index.fieldAnalyzers != nil {
+		if an, ok := index.fieldAnalyzers[field]; ok && an != nil {
+			return an
+		}
+	}
+	if index.analyzer != nil {
+		return index.analyzer
+	}
+	return defaultAnalyzer
 }
 
 type partialIndex struct {
@@ -453,7 +594,7 @@ func (index *Index) mergePartial(partial partialIndex) {
 		index.docLength[id] = length
 	}
 	for term, postings := range partial.inverted {
-		index.index[term] = append(index.index[term], postings...)
+		index.appendPostings(term, postings)
 	}
 	index.TotalDocs += partial.totalDocs
 	index.Unlock()
@@ -503,7 +644,7 @@ func (index *Index) BuildFromReader(ctx context.Context, r io.Reader, callbacks 
 	if !ok || d != '[' {
 		return fmt.Errorf("invalid JSON array, expected '[' got %v", tok)
 	}
-	jobs := make(chan GenericRecord, 500)
+	jobs := make(chan Document, 500)
 	const flushThreshold = 100
 	var wg sync.WaitGroup
 	for w := 0; w < index.NumWorkers; w++ {
@@ -515,15 +656,18 @@ func (index *Index) BuildFromReader(ctx context.Context, r io.Reader, callbacks 
 				lengths:  make(map[int64]int),
 				inverted: make(map[string][]Posting),
 			}
-			var localID, count int
-			for rec := range jobs {
+			var count int
+			for doc := range jobs {
 				if ctx.Err() != nil {
 					return
 				}
-				localID++
-				docID := utils.NewID().Int64()
+				rec := doc.Data()
+				if rec == nil {
+					continue
+				}
+				docID := doc.ID()
 				partial.docs[docID] = rec
-				freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
+				freq := index.computeFrequencies(rec)
 				docLen := 0
 				for term, cnt := range freq {
 					partial.inverted[term] = append(partial.inverted[term], Posting{DocID: docID, Frequency: cnt})
@@ -552,22 +696,43 @@ func (index *Index) BuildFromReader(ctx context.Context, r io.Reader, callbacks 
 			}
 		}(w)
 	}
+	errCh := make(chan error, 1)
 	// Updated job producer: check context and break out properly
 	go func() {
+		defer close(jobs)
 		for decoder.More() {
 			if ctx.Err() != nil {
-				break
+				return
 			}
 			var rec GenericRecord
 			if err := decoder.Decode(&rec); err != nil {
 				log.Printf("Skipping invalid record: %v", err)
 				continue
 			}
-			jobs <- rec
+			doc, err := index.adaptDocument(ctx, rec)
+			if err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				continue
+			}
+			select {
+			case jobs <- doc:
+			case <-ctx.Done():
+				return
+			}
 		}
-		close(jobs)
 	}()
 	wg.Wait()
+	select {
+	case err := <-errCh:
+		index.Lock()
+		index.indexingInProgress = false
+		index.Unlock()
+		return err
+	default:
+	}
 	index.Lock()
 	index.update()
 	index.Unlock()
@@ -577,10 +742,9 @@ func (index *Index) BuildFromReader(ctx context.Context, r io.Reader, callbacks 
 func (index *Index) Evaluate(tokens []string) []int64 {
 	var docSet []int64
 	for _, token := range tokens {
-		if postings, ok := index.index[token]; ok {
-			for _, p := range postings {
-				docSet = append(docSet, p.DocID)
-			}
+		postings := index.getPostings(token)
+		for _, p := range postings {
+			docSet = append(docSet, p.DocID)
 		}
 	}
 	return docSet
@@ -618,8 +782,7 @@ func (index *Index) Build(ctx context.Context, input any, callbacks ...func(v Ge
 			}
 			defer db.Close()
 			return squealx.SelectEach(db, func(row map[string]any) error {
-				index.AddDocument(row)
-				return nil
+				return index.AddDocumentContext(ctx, row)
 			}, v.Database.DBQuery)
 		}
 		if v.Path != "" {
@@ -656,7 +819,7 @@ func (index *Index) BuildFromRecords(ctx context.Context, records any, callbacks
 	index.indexingInProgress = true
 	index.searchCache = make(map[string]cacheEntry)
 	index.Unlock()
-	jobs := make(chan GenericRecord, 50)
+	jobs := make(chan Document, 50)
 	const flushThreshold = 100
 	var wg sync.WaitGroup
 	for w := 0; w < index.NumWorkers; w++ {
@@ -668,15 +831,18 @@ func (index *Index) BuildFromRecords(ctx context.Context, records any, callbacks
 				lengths:  make(map[int64]int),
 				inverted: make(map[string][]Posting),
 			}
-			var localID, count int
-			for rec := range jobs {
+			var count int
+			for doc := range jobs {
 				if ctx.Err() != nil {
 					break
 				}
-				localID++
-				docID := utils.NewID().Int64()
+				rec := doc.Data()
+				if rec == nil {
+					continue
+				}
+				docID := doc.ID()
 				partial.docs[docID] = rec
-				freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
+				freq := index.computeFrequencies(rec)
 				docLen := 0
 				for term, cnt := range freq {
 					partial.inverted[term] = append(partial.inverted[term], Posting{DocID: docID, Frequency: cnt})
@@ -705,26 +871,64 @@ func (index *Index) BuildFromRecords(ctx context.Context, records any, callbacks
 			}
 		}(w)
 	}
+	errCh := make(chan error, 1)
 	go func() {
-		switch records := records.(type) {
+		defer close(jobs)
+		switch recSet := records.(type) {
 		case []GenericRecord:
-			for _, rec := range records {
+			for _, rec := range recSet {
 				if ctx.Err() != nil {
-					break
+					return
 				}
-				jobs <- rec
+				doc, err := index.adaptDocument(ctx, rec)
+				if err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					continue
+				}
+				select {
+				case jobs <- doc:
+				case <-ctx.Done():
+					return
+				}
 			}
 		case []map[string]any:
-			for _, rec := range records {
+			for _, rec := range recSet {
 				if ctx.Err() != nil {
-					break
+					return
 				}
-				jobs <- rec
+				doc, err := index.adaptDocument(ctx, rec)
+				if err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					continue
+				}
+				select {
+				case jobs <- doc:
+				case <-ctx.Done():
+					return
+				}
+			}
+		default:
+			select {
+			case errCh <- fmt.Errorf("unsupported records type %T", records):
+			default:
 			}
 		}
-		close(jobs)
 	}()
 	wg.Wait()
+	select {
+	case err := <-errCh:
+		index.Lock()
+		index.indexingInProgress = false
+		index.Unlock()
+		return err
+	default:
+	}
 	index.Lock()
 	index.update()
 	index.Unlock()
@@ -755,7 +959,7 @@ func (index *Index) indexDoc(docID int64, rec GenericRecord, freq map[string]int
 	index.documents.Insert(docID, rec)
 	docLen := 0
 	for t, count := range freq {
-		index.index[t] = append(index.index[t], Posting{DocID: docID, Frequency: count})
+		index.appendPostings(t, []Posting{{DocID: docID, Frequency: count}})
 		docLen += count
 	}
 	index.docLength[docID] = docLen
@@ -778,8 +982,8 @@ func (index *Index) bm25Score(queryTokens []string, docID int64, k1, b float64) 
 	score := 0.0
 	docLength := float64(index.docLength[docID])
 	for _, term := range queryTokens {
-		postings, ok := index.index[term]
-		if !ok {
+		postings := index.getPostings(term)
+		if len(postings) == 0 {
 			continue
 		}
 		df := float64(len(postings))
@@ -1325,8 +1529,8 @@ func (index *Index) searchUltraFast(ctx context.Context, req Request, sortField 
 	// For single token queries, direct lookup
 	if len(queryTokens) == 1 {
 		token := queryTokens[0]
-		postings, exists := index.index[token]
-		if !exists {
+		postings := index.getPostings(token)
+		if len(postings) == 0 {
 			return smartPaginate(nil, req.Page, req.Size), nil
 		}
 
@@ -1350,7 +1554,7 @@ func (index *Index) searchUltraFast(ctx context.Context, req Request, sortField 
 	totalDocs := 0
 
 	for i, token := range queryTokens {
-		if postings, exists := index.index[token]; exists {
+		if postings := index.getPostings(token); len(postings) > 0 {
 			docSet := make([]int64, len(postings))
 			for j, posting := range postings {
 				docSet[j] = posting.DocID
@@ -1495,29 +1699,30 @@ func (index *Index) UpdateDocument(docID int64, rec GenericRecord) error {
 		return fmt.Errorf("document %d does not exist", docID)
 	}
 
-	oldFreq := oldRec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
+	oldFreq := index.computeFrequencies(oldRec)
 	for term := range oldFreq {
-		if postings, exists := index.index[term]; exists {
-			newPostings := postings[:0]
+		postings := index.getPostings(term)
+		if len(postings) > 0 {
+			filtered := make([]Posting, 0, len(postings))
 			for _, p := range postings {
 				if p.DocID != docID {
-					newPostings = append(newPostings, p)
+					filtered = append(filtered, p)
 				}
 			}
-			if len(newPostings) == 0 {
-				delete(index.index, term)
+			if len(filtered) == 0 {
+				index.deletePostings(term)
 			} else {
-				index.index[term] = newPostings
+				index.replacePostings(term, filtered)
 			}
 		}
 		index.docLength[docID] -= oldFreq[term]
 	}
 	index.documents.Insert(docID, rec)
-	newFreq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
+	newFreq := index.computeFrequencies(rec)
 	docLen := 0
 	for term, count := range newFreq {
 		docLen += count
-		index.index[term] = append(index.index[term], Posting{DocID: docID, Frequency: count})
+		index.appendPostings(term, []Posting{{DocID: docID, Frequency: count}})
 	}
 	index.docLength[docID] = docLen
 	index.update()
@@ -1533,20 +1738,22 @@ func (index *Index) DeleteDocument(docID int64) error {
 		index.Unlock()
 		return fmt.Errorf("document %d does not exist", docID)
 	}
-	freq := rec.getFrequency(index.FieldsToIndex, index.IndexFieldsExcept)
+	freq := index.computeFrequencies(rec)
 	for term := range freq {
-		if postings, exists := index.index[term]; exists {
-			newPostings := postings[:0]
-			for _, p := range postings {
-				if p.DocID != docID {
-					newPostings = append(newPostings, p)
-				}
+		postings := index.getPostings(term)
+		if len(postings) == 0 {
+			continue
+		}
+		filtered := make([]Posting, 0, len(postings))
+		for _, p := range postings {
+			if p.DocID != docID {
+				filtered = append(filtered, p)
 			}
-			if len(newPostings) == 0 {
-				delete(index.index, term)
-			} else {
-				index.index[term] = newPostings
-			}
+		}
+		if len(filtered) == 0 {
+			index.deletePostings(term)
+		} else {
+			index.replacePostings(term, filtered)
 		}
 	}
 	index.documents.Delete(docID)
@@ -1606,8 +1813,7 @@ type RPCServer struct {
 }
 
 func (s *RPCServer) AddDocumentRPC(args *RPCAddRequest, reply *RPCAddResponse) error {
-	s.Index.AddDocument(args.Record)
-	return nil
+	return s.Index.AddDocument(args.Record)
 }
 
 func (s *RPCServer) SearchRPC(args *RPCSearchRequest, reply *RPCSearchResponse) error {
@@ -1648,7 +1854,7 @@ func (index *Index) SaveToDisk(path string) error {
 	index.RLock()
 	defer index.RUnlock()
 	data := indexPersistence{
-		Index:     index.index,
+		Index:     index.snapshotPostings(),
 		DocLength: index.docLength,
 		TotalDocs: index.TotalDocs,
 	}
@@ -1674,7 +1880,10 @@ func (index *Index) LoadFromDisk(path string) error {
 		return err
 	}
 	index.Lock()
-	index.index = data.Index
+	index.postings = newPostingStore()
+	for term, postings := range data.Index {
+		index.replacePostings(term, postings)
+	}
 	index.docLength = data.DocLength
 	index.TotalDocs = data.TotalDocs
 	index.Unlock()

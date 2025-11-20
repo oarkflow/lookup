@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -154,7 +155,7 @@ func (ot *OptimizedTokenization) fastStem(word string) string {
 type HighPerformanceIndex struct {
 	*Index
 	tokenizer  *OptimizedTokenization
-	docBuffer  []GenericRecord
+	docBuffer  []Document
 	bufferSize int
 	bufferMu   sync.Mutex
 }
@@ -167,12 +168,12 @@ func NewHighPerformanceIndex(id string, bufferSize int, opts ...Options) *HighPe
 	hpi := &HighPerformanceIndex{
 		Index:      NewIndex(id, opts...),
 		tokenizer:  tokenizer,
-		docBuffer:  make([]GenericRecord, 0, bufferSize),
+		docBuffer:  make([]Document, 0, bufferSize),
 		bufferSize: bufferSize,
 	}
 
 	// Override the document processing to use optimized tokenization
-	hpi.Index.addDocChan = make(chan GenericRecord, 10000)
+	hpi.Index.addDocChan = make(chan Document, 10000)
 
 	go hpi.processOptimizedBatchLoop()
 
@@ -182,7 +183,7 @@ func NewHighPerformanceIndex(id string, bufferSize int, opts ...Options) *HighPe
 // processOptimizedBatchLoop processes documents with optimized tokenization
 func (hpi *HighPerformanceIndex) processOptimizedBatchLoop() {
 	flushThreshold := 2000 // Larger batch for better throughput
-	batchPtr := batchPool.Get().(*[]GenericRecord)
+	batchPtr := batchPool.Get().(*[]Document)
 	batch := *batchPtr
 	batch = batch[:0]
 	ticker := time.NewTicker(100 * time.Millisecond) // More frequent flushing
@@ -193,14 +194,14 @@ func (hpi *HighPerformanceIndex) processOptimizedBatchLoop() {
 
 	for {
 		select {
-		case rec, ok := <-hpi.Index.addDocChan:
+		case doc, ok := <-hpi.Index.addDocChan:
 			if !ok {
 				if len(batch) > 0 {
 					hpi.processOptimizedBatch(batch)
 				}
 				return
 			}
-			batch = append(batch, rec)
+			batch = append(batch, doc)
 			if len(batch) >= flushThreshold {
 				hpi.processOptimizedBatch(batch)
 				batch = batch[:0]
@@ -215,15 +216,19 @@ func (hpi *HighPerformanceIndex) processOptimizedBatchLoop() {
 }
 
 // processOptimizedBatch processes a batch with optimized tokenization
-func (hpi *HighPerformanceIndex) processOptimizedBatch(recs []GenericRecord) {
+func (hpi *HighPerformanceIndex) processOptimizedBatch(docs []Document) {
 	partial := partialIndex{
 		docs:     make(map[int64]GenericRecord),
 		lengths:  make(map[int64]int),
 		inverted: make(map[string][]Posting),
 	}
 
-	for _, rec := range recs {
-		docID := hpi.extractDocID(rec)
+	for _, doc := range docs {
+		rec := doc.Data()
+		if rec == nil {
+			continue
+		}
+		docID := doc.ID()
 		combined := rec.String(hpi.FieldsToIndex, hpi.IndexFieldsExcept)
 		tokens := hpi.tokenizer.TokenizeOptimized(combined)
 
@@ -409,12 +414,12 @@ func (obm25 *OptimizedBM25) ScoreOptimized(index *Index, queryTokens []string, d
 		obm25.mu.RUnlock()
 
 		if !exists {
-			if postings, ok := index.index[term]; ok {
-				df := float64(len(postings))
-				idf = math.Log((float64(index.TotalDocs)-df+0.5)/(df+0.5) + 1)
-			} else {
+			postings := index.getPostings(term)
+			if len(postings) == 0 {
 				continue
 			}
+			df := float64(len(postings))
+			idf = math.Log((float64(index.TotalDocs)-df+0.5)/(df+0.5) + 1)
 
 			// Cache the IDF (with size limit to prevent unbounded growth)
 			obm25.mu.Lock()
@@ -427,12 +432,10 @@ func (obm25 *OptimizedBM25) ScoreOptimized(index *Index, queryTokens []string, d
 
 		// Find term frequency for this document
 		var tf int
-		if postings, ok := index.index[term]; ok {
-			for _, p := range postings {
-				if p.DocID == docID {
-					tf = p.Frequency
-					break
-				}
+		for _, p := range index.getPostings(term) {
+			if p.DocID == docID {
+				tf = p.Frequency
+				break
 			}
 		}
 
@@ -454,22 +457,20 @@ func (obm25 *OptimizedBM25) scoreWithoutCache(index *Index, queryTokens []string
 
 	for _, term := range queryTokens {
 		// Compute IDF directly
-		var idf float64
-		if postings, ok := index.index[term]; ok {
-			df := float64(len(postings))
-			idf = math.Log((float64(index.TotalDocs)-df+0.5)/(df+0.5) + 1)
-		} else {
+		postings := index.getPostings(term)
+		if len(postings) == 0 {
 			continue
 		}
+		var idf float64
+		df := float64(len(postings))
+		idf = math.Log((float64(index.TotalDocs)-df+0.5)/(df+0.5) + 1)
 
 		// Find term frequency for this document
 		var tf int
-		if postings, ok := index.index[term]; ok {
-			for _, p := range postings {
-				if p.DocID == docID {
-					tf = p.Frequency
-					break
-				}
+		for _, p := range postings {
+			if p.DocID == docID {
+				tf = p.Frequency
+				break
 			}
 		}
 
@@ -639,15 +640,15 @@ func logBase2(x float64) float64 {
 type CompressedIndex struct {
 	mu               sync.RWMutex
 	compressedTerms  map[string][]byte
-	originalIndex    map[string][]Posting
 	compressionRatio float64
+	terms            map[string]struct{}
 }
 
 // NewCompressedIndex creates a new compressed index
 func NewCompressedIndex() *CompressedIndex {
 	return &CompressedIndex{
 		compressedTerms: make(map[string][]byte),
-		originalIndex:   make(map[string][]Posting),
+		terms:           make(map[string]struct{}),
 	}
 }
 
@@ -657,17 +658,22 @@ func (ci *CompressedIndex) CompressPostings(term string, postings []Posting) {
 	defer ci.mu.Unlock()
 
 	if len(postings) == 0 {
+		delete(ci.compressedTerms, term)
+		delete(ci.terms, term)
 		return
 	}
 
-	// Store original for fallback
-	ci.originalIndex[term] = postings
+	sorted := make([]Posting, len(postings))
+	copy(sorted, postings)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].DocID < sorted[j].DocID
+	})
 
 	// Simple delta encoding + variable byte encoding
-	compressed := make([]byte, 0, len(postings)*16)
+	compressed := make([]byte, 0, len(sorted)*16)
 
 	var prevDocID int64 = 0
-	for _, posting := range postings {
+	for _, posting := range sorted {
 		// Encode delta of document ID
 		delta := posting.DocID - prevDocID
 		compressed = append(compressed, encodeVarint(delta)...)
@@ -676,9 +682,10 @@ func (ci *CompressedIndex) CompressPostings(term string, postings []Posting) {
 	}
 
 	ci.compressedTerms[term] = compressed
+	ci.terms[term] = struct{}{}
 
 	// Calculate compression ratio
-	originalSize := len(postings) * 16 // Rough estimate: 8 bytes ID + 8 bytes frequency
+	originalSize := len(sorted) * 16 // Rough estimate: 8 bytes ID + 8 bytes frequency
 	compressedSize := len(compressed)
 	ci.compressionRatio = float64(compressedSize) / float64(originalSize)
 }
@@ -690,10 +697,6 @@ func (ci *CompressedIndex) DecompressPostings(term string) []Posting {
 
 	compressed, exists := ci.compressedTerms[term]
 	if !exists {
-		// Fallback to original
-		if original, ok := ci.originalIndex[term]; ok {
-			return original
-		}
 		return nil
 	}
 
@@ -718,6 +721,32 @@ func (ci *CompressedIndex) DecompressPostings(term string) []Posting {
 	}
 
 	return postings
+}
+
+// Delete removes a term entirely from the compressed index.
+func (ci *CompressedIndex) Delete(term string) {
+	ci.mu.Lock()
+	defer ci.mu.Unlock()
+	delete(ci.compressedTerms, term)
+	delete(ci.terms, term)
+}
+
+// Terms returns a snapshot of available terms.
+func (ci *CompressedIndex) Terms() []string {
+	ci.mu.RLock()
+	defer ci.mu.RUnlock()
+	terms := make([]string, 0, len(ci.terms))
+	for term := range ci.terms {
+		terms = append(terms, term)
+	}
+	return terms
+}
+
+// Len returns the number of indexed terms.
+func (ci *CompressedIndex) Len() int {
+	ci.mu.RLock()
+	defer ci.mu.RUnlock()
+	return len(ci.terms)
 }
 
 // Simple variable-length integer encoding
@@ -1212,8 +1241,7 @@ func (ai *AsyncIndexer) processWork(work IndexWork) error {
 
 // indexDocument indexes a single document
 func (ai *AsyncIndexer) indexDocument(doc GenericRecord) error {
-	ai.index.AddDocument(doc)
-	return nil
+	return ai.index.AddDocument(doc)
 }
 
 // updateDocument updates an existing document

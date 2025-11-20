@@ -32,26 +32,26 @@ func NewTermQuery(term string, fuzzy bool, threshold int) TermQuery {
 func (tq TermQuery) Evaluate(index *Index) []int64 {
 	term := utils.ToLower(tq.Term)
 	if !tq.Fuzzy {
-		if postings, ok := index.index[term]; ok {
-			out := make([]int64, len(postings))
-			for i, p := range postings {
-				out[i] = p.DocID
-			}
-			return out
+		postings := index.getPostings(term)
+		if len(postings) == 0 {
+			return nil
 		}
-		return nil
+		out := make([]int64, len(postings))
+		for i, p := range postings {
+			out[i] = p.DocID
+		}
+		return out
 	}
 	candidates := index.FuzzySearch(term, tq.FuzzyThreshold)
 	candidates = append(candidates, term)
 	seen := map[int64]struct{}{}
 	var out []int64
 	for _, tok := range candidates {
-		if postings, ok := index.index[tok]; ok {
-			for _, p := range postings {
-				if _, exists := seen[p.DocID]; !exists {
-					seen[p.DocID] = struct{}{}
-					out = append(out, p.DocID)
-				}
+		postings := index.getPostings(tok)
+		for _, p := range postings {
+			if _, exists := seen[p.DocID]; !exists {
+				seen[p.DocID] = struct{}{}
+				out = append(out, p.DocID)
 			}
 		}
 	}
@@ -108,10 +108,8 @@ func (pq PhraseQuery) Evaluate(index *Index) []int64 {
 			fuzzyTokens = append(fuzzyTokens, token)
 			set := make(map[int64]struct{})
 			for _, ft := range fuzzyTokens {
-				if postings, ok := index.index[ft]; ok {
-					for _, p := range postings {
-						set[p.DocID] = struct{}{}
-					}
+				for _, p := range index.getPostings(ft) {
+					set[p.DocID] = struct{}{}
 				}
 			}
 			if len(set) == 0 {
@@ -125,8 +123,8 @@ func (pq PhraseQuery) Evaluate(index *Index) []int64 {
 		}
 	} else {
 		for _, token := range tokens {
-			postings, ok := index.index[token]
-			if !ok {
+			postings := index.getPostings(token)
+			if len(postings) == 0 {
 				return nil
 			}
 			var ids []int64

@@ -425,12 +425,11 @@ func (fq FuzzyQuery) Evaluate(index *Index) []int64 {
 	var result []int64
 
 	for _, candidate := range candidates {
-		if postings, ok := index.index[candidate]; ok {
-			for _, p := range postings {
-				if _, exists := seen[p.DocID]; !exists {
-					seen[p.DocID] = struct{}{}
-					result = append(result, p.DocID)
-				}
+		postings := index.getPostings(candidate)
+		for _, p := range postings {
+			if _, exists := seen[p.DocID]; !exists {
+				seen[p.DocID] = struct{}{}
+				result = append(result, p.DocID)
 			}
 		}
 	}
@@ -585,7 +584,7 @@ func (acq *AutoCorrectQuery) correctToken(token string, index *Index) string {
 	defer index.RUnlock()
 
 	// If token exists in index, return as-is
-	if _, exists := index.index[token]; exists {
+	if len(index.getPostings(token)) > 0 {
 		return token
 	}
 
@@ -593,13 +592,14 @@ func (acq *AutoCorrectQuery) correctToken(token string, index *Index) string {
 	bestMatch := token
 	bestDistance := 3 // Maximum distance to consider
 
-	for indexedToken := range index.index {
+	index.rangePostings(func(indexedToken string, _ []Posting) bool {
 		distance := utils.BoundedLevenshtein(token, indexedToken, bestDistance)
 		if distance < bestDistance {
 			bestDistance = distance
 			bestMatch = indexedToken
 		}
-	}
+		return true
+	})
 
 	return bestMatch
 }
